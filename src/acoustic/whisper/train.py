@@ -352,7 +352,7 @@ def main() -> None:
     )
 
     t0           = time.perf_counter()
-    train_result = trainer.train(resume_from_checkpoint=args.resume_from)
+    train_result = trainer.train()#resume_from_checkpoint=args.resume_from)
     elapsed_h    = (time.perf_counter() - t0) / 3600
     tqdm.write(f"\n  Training finished in {elapsed_h:.2f} h")
 

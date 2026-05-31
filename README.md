@@ -2,6 +2,24 @@
 Speach-to-text for Russian language
 
 
+## WORKING IN REPO
+
+Please, make commit messages READABLE, UNDERSTANDABLE, SELF-EXPLANATORY and on English.
+
+```bash
+# Starting
+git clone https://github.com/RomanRudin/STT_russian_lang
+git branch NAME_OF_YPUR_BRANCH
+git checkout NAME_OF_YPUR_BRANCH
+
+# Pulling
+git pull
+
+# I think I'd be doing merging but for the sake of fullness
+git merge NAME_OF_YPUR_BRANCH
+```
+
+# Acoustic model
 ### Setup
 
 ```bash
