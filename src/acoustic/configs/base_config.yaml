@@ -36,7 +36,7 @@ dataset:
   num_proc: 4 # for multiprocessing (set >1 on Linux)
   augmentations:
     noise_speed:
-      enabled: true
+      enabled: false
       noise_prob: 0.3
       noise_level_min: 0.001
       noise_level_max: 0.015
@@ -46,6 +46,7 @@ dataset:
 training:
   trainer: "WhisperTrainer"
   output_dir: "./acoustic/checkpoints"
+  logging_dir: "./acoustic/checkpoints/logs"
   experiment_name: "baseline"
   per_device_train_batch_size: 4
   per_device_eval_batch_size: 8

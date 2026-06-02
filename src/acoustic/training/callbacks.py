@@ -59,18 +59,16 @@ class EvalTqdmCallback(TrainerCallback):
             self.eval_pbar.close()
 
 
-# Registry: stores class constructors, not instances
+# Registry
 CALLBACKS = PluginRegistry("callback")
 
-# Manual registration
 CALLBACKS.register("tqdm", TqdmCallback)
 CALLBACKS.register("eval_tqdm", EvalTqdmCallback)
 
 
 def get_callback(name: str, **kwargs) -> TrainerCallback:
-    """
-    Instantiate a callback by its registered name.
-    Additional keyword arguments are passed to the constructor.
-    """
+    if name not in CALLBACKS:
+        raise ValueError(f"Unknown callback: {name}. Available: {list(CALLBACKS._items.keys())}")
+    # Get the class from registry and instantiate with kwargs
     cb_class = CALLBACKS.get(name)
     return cb_class(**kwargs)

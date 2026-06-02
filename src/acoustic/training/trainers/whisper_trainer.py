@@ -17,10 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 class WhisperTrainer(BaseTrainer):
-    """
-    Trainer tailored for Whisper models.
-    Implements all abstract methods from BaseTrainer.
-    """
+    """Trainer tailored for Whisper models. Implements all abstract methods."""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -54,6 +51,7 @@ class WhisperTrainer(BaseTrainer):
             dataloader_num_workers=t_cfg.get('dataloader_num_workers', 0),
             remove_unused_columns=False,
             report_to=["tensorboard"],
+            logging_dir=os.path.join(output_dir, "logs"),   # tensorboard logs
             disable_tqdm=True,
         )
 
@@ -79,9 +77,7 @@ class WhisperTrainer(BaseTrainer):
 
         results = {}
         for metric_fn in self.metrics:
-            results.update(
-                metric_fn({"predictions": list(preds_clean), "references": list(refs_clean)})
-            )
+            results.update(metric_fn({"predictions": list(preds_clean), "references": list(refs_clean)}))
         return results
 
     def _setup_trainer(self) -> None:
@@ -136,6 +132,7 @@ class WhisperTrainer(BaseTrainer):
                 logger.info("Starting training from scratch")
                 self.hf_trainer.train()
 
+        # Save final model and processor
         final_dir = os.path.join(self.training_args.output_dir, "final_model")
         self.hf_trainer.save_model(final_dir)
         self.processor.save_pretrained(final_dir)
@@ -148,3 +145,11 @@ class WhisperTrainer(BaseTrainer):
         if test_dataset is None:
             raise ValueError("No evaluation dataset provided")
         return self.hf_trainer.evaluate(eval_dataset=test_dataset, metric_key_prefix="test")
+
+    # Ensure processor is saved in every checkpoint
+    def _save_checkpoint(self, model, trial, metrics=None):
+        super()._save_checkpoint(model, trial, metrics)
+        checkpoint_folder = f"checkpoint-{self.hf_trainer.state.global_step}"
+        output_dir = os.path.join(self.training_args.output_dir, checkpoint_folder)
+        self.processor.save_pretrained(output_dir)
+        logger.info(f"Processor saved to {output_dir}")
