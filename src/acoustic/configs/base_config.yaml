@@ -1,51 +1,50 @@
 # Model settings
 model:
-  name: "openai/whisper-small" # or whisper-### for experiments
-  import_path: "whisper.model.build_whisper"
+  name: "openai/whisper-small"
+  builder: "whisper" # ключ в MODEL_BUILDERS
   language: "russian"
   task: "transcribe"
-  use_lora: false # enable LoRA fine-tuning
+  use_lora: false
+  collator: "whisper" # ключ в реестре collators
+  collator_params:
+    max_audio_length: 30
+    max_label_length: 225
 
-# Dataset configuration
 dataset:
-  #max_train_samples: 500
-  #max_eval_samples: 100 
-  create_function: "combined_dataset.create_combined"
-  # List of filters to apply after loading
+  max_train_samples: 100
+  max_eval_samples: 20 
+  create_function: "combined_dataset" # ключ в реестре dataset
   filters:
     - "duration_filter"
     - "text_normalizer"
-  # Caching settings
   cache:
     use_cache: true
     cache_dir: "./acoustic/data/processed"
     force_recreate: false
-  # Data sources
   sources:
     fleurs:
       enabled: true
     golos:
       enabled: false
-      path: null                     # e.g. "D:/golos" or "/data/golos"
+      path: null # e.g. "D:/golos" or "/data/golos"
       subsets: ["crowd", "farfield"] # or just ["crowd"]
       val_fraction: 0.02
-  # Audio parameters
   params:
     sample_rate: 16000
     max_duration: 30.0
     min_duration: 0.5
-  num_proc: 4                        # for multiprocessing (set >1 on Linux)
-
-# Augmentation settings (applied during preprocessing)
-augmentation:
-  enabled: true
-  noise_prob: 0.3
-  noise_level_min: 0.001
-  noise_level_max: 0.015
-  speed_prob: 0.2
-  speed_range: [0.9, 1.1]
+  num_proc: 4 # for multiprocessing (set >1 on Linux)
+  augmentations:
+    noise_speed:
+      enabled: true
+      noise_prob: 0.3
+      noise_level_min: 0.001
+      noise_level_max: 0.015
+      speed_prob: 0.2
+      speed_range: [0.9, 1.1]
 
 training:
+  trainer: "WhisperTrainer"
   output_dir: "./acoustic/checkpoints"
   experiment_name: "baseline"
   per_device_train_batch_size: 4
@@ -53,10 +52,10 @@ training:
   gradient_accumulation_steps: 8
   learning_rate: 1.0e-5
   warmup_steps: 500
-  num_train_epochs: 5           # вместо max_steps
-  eval_strategy: "epoch"        # валидация после каждой эпохи
-  save_strategy: "epoch"        # сохранение после каждой эпохи
-  logging_strategy: "epoch"     # логирование после каждой эпохи
+  num_train_epochs: 5
+  eval_strategy: "epoch"
+  save_strategy: "epoch"
+  logging_strategy: "epoch"
   fp16: false # true if (gpu and gpu normal) else false
   dataloader_num_workers: 2 # 0 on Windows, >0 on Linux
   load_best_model_at_end: true

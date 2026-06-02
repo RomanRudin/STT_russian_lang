@@ -1,13 +1,21 @@
+from typing import Dict, Any
+from acoustic.utils.registry import PluginRegistry
+
 from .wer import compute_wer
 from .cer import compute_cer
 
-METRICS = {
-    "wer": compute_wer,
-    "cer": compute_cer,
-}
+
+# Define a dummy interface for signature checking
+def _metric_interface(eval_pred: Dict[str, Any]) -> Dict[str, float]:
+    ...
+
+
+METRICS = PluginRegistry("metric", interface=_metric_interface)
+
+# Manual registration
+METRICS.register("wer", compute_wer)
+METRICS.register("cer", compute_cer)
+
 
 def get_metric(name: str):
-    """Return metric function by name."""
-    if name not in METRICS:
-        raise ValueError(f"Unknown metric: {name}. Available: {list(METRICS.keys())}")
-    return METRICS[name]
+    return METRICS.get(name)
