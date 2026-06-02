@@ -5,7 +5,6 @@ from datasets import DatasetDict, load_from_disk
 from tqdm import tqdm
 
 from acoustic.dataset.filters import get_filter
-from acoustic.dataset.augmentations import get_augmentation
 from acoustic.dataset.create_dataset import get_dataset_builder
 
 logger = logging.getLogger(__name__)
@@ -34,18 +33,6 @@ def load_and_prepare_dataset(cfg: Dict[str, Any]) -> DatasetDict:
     for name in tqdm(filter_names, desc="Applying filters"):
         filter_fn = get_filter(name)
         dataset = filter_fn(dataset, cfg)
-
-    # Apply augmentations
-    aug_configs = cfg['dataset'].get('augmentations', {})
-    if isinstance(aug_configs, list):
-        aug_configs = {name: {"enabled": True} for name in aug_configs}
-    for name, params in aug_configs.items():
-        if isinstance(params, bool):
-            params = {"enabled": params}
-        if not params:
-            continue
-        aug_fn = get_augmentation(name)
-        dataset = aug_fn(dataset, params)
 
     # Optional sample limits
     max_train = cfg['dataset'].get('max_train_samples')

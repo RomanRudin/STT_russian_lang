@@ -4,6 +4,7 @@ from typing import Any, Tuple, Optional
 
 from acoustic.models import MODEL_BUILDERS, get_model_builder
 from acoustic.models.collators import get_collator_class
+from acoustic.augmentations import build_augmentations
 
 logger = logging.getLogger(__name__)
 
@@ -60,10 +61,14 @@ def build_model(cfg: dict) -> Tuple[Any, Any, Optional[Any]]:
     collator_name = cfg['model'].get('collator')
     if collator_name:
         collator_cls = get_collator_class(collator_name)
-        # Optional extra parameters for the collator
-        collator_kwargs = cfg['model'].get('collator_params', {})
-        data_collator = collator_cls(processor, **collator_kwargs)
-        logger.info("Using collator '%s'", collator_name)
+        collator_kwargs = cfg['model'].get('collator_params', {}).copy()
+        # Extract and build augmentations
+        aug_config = collator_kwargs.pop('augmentations', {})
+        augmentations = build_augmentations(aug_config) if aug_config else []
+        data_collator = collator_cls(processor, augmentations=augmentations, **collator_kwargs)
+        logger.info("Using collator '%s' with augmentations: %s",
+                    collator_name,
+                    list(aug_config.keys()) if aug_config else "none")
     else:
         logger.info("No collator specified; using default DataCollatorForSeq2Seq in trainer")
 
