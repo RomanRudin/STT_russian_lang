@@ -1,6 +1,6 @@
 # Model settings
 model:
-  name: "openai/whisper-tiny" # or whisper-medium for experiments
+  name: "openai/whisper-small" # or whisper-### for experiments
   import_path: "whisper.model.build_whisper"
   language: "russian"
   task: "transcribe"
@@ -8,8 +8,8 @@ model:
 
 # Dataset configuration
 dataset:
-  max_train_samples: 500
-  max_eval_samples: 100 
+  #max_train_samples: 500
+  #max_eval_samples: 100 
   create_function: "combined_dataset.create_combined"
   # List of filters to apply after loading
   filters:
@@ -34,7 +34,7 @@ dataset:
     sample_rate: 16000
     max_duration: 30.0
     min_duration: 0.5
-  num_proc: 1                        # for multiprocessing (set >1 on Linux)
+  num_proc: 4                        # for multiprocessing (set >1 on Linux)
 
 # Augmentation settings (applied during preprocessing)
 augmentation:
@@ -48,9 +48,9 @@ augmentation:
 training:
   output_dir: "./acoustic/checkpoints"
   experiment_name: "baseline"
-  per_device_train_batch_size: 8
+  per_device_train_batch_size: 4
   per_device_eval_batch_size: 8
-  gradient_accumulation_steps: 2
+  gradient_accumulation_steps: 8
   learning_rate: 1.0e-5
   warmup_steps: 500
   num_train_epochs: 5           # вместо max_steps
