@@ -126,7 +126,7 @@ def collate_fn(batch, pad_id: int = 0):
 
 
 if __name__ == "__main__":
-    from data.dataset import load_texts
+    from dataset.dataset import load_texts
 
     texts = load_texts("synthetic")
     v = WordVocab.build(texts)
