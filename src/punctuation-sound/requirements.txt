@@ -1,0 +1,12 @@
+--extra-index-url https://download.pytorch.org/whl/cu124
+torch==2.6.0+cu124
+numpy<2.0
+datasets>=2.19.0,<2.21.0
+transformers>=4.40
+huggingface_hub
+soundfile           # бэкенд для чтения аудио FLEURS (DATASETS_AUDIO_BACKEND=soundfile)
+librosa             # F0 (pyin), энергия
+# Любой из выравнивателей; в data.forced_align используется ctc-forced-aligner.
+# Альтернативы: whisperx ; montreal-forced-aligner (conda)
+ctc-forced-aligner  # pip install git+https://github.com/MahmoudAshraf97/ctc-forced-aligner.git
+tqdm
