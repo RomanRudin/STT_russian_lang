@@ -5,10 +5,7 @@ dataset.py
 
   source="synthetic"  — встроенный мини-корпус русских предложений (офлайн,
                         запускается без интернета, для демо);
-  source="fleurs"     — Google FLEURS (ru_ru) через HuggingFace datasets
-                        (нужно скачивание; используются ТОЛЬКО транскрипции,
-                        аудио игнорируется — модель текстовая).
-
+  source="lenta2" — Хороший датасет с правильной пунктуацией.
 Возвращает список строк "сырого" текста; разметку делает preprocess.py.
 """
 
@@ -73,18 +70,19 @@ _SYNTHETIC = [
 ]
 
 
-def _load_fleurs(split: str, limit: int | None) -> List[str]:
-    """Загружает транскрипции FLEURS (ru_ru). Требует `datasets`."""
-    from datasets import load_dataset  # импорт здесь, чтобы офлайн-режим не падал
-
-    ds = load_dataset("google/fleurs", "ru_ru", split=split)
+def _load_lenta2(split: str, limit: int | None) -> List[str]:
+    from datasets import load_dataset
+    
+    ds = load_dataset("Dmitriy007/Lenta2", split="train")
+    
     texts: List[str] = []
     for row in ds:
-        # FLEURS даёт нормализованную и "raw" транскрипцию; берём raw —
-        # в ней сохранена пунктуация и регистр.
-        t = (row.get("raw_transcription") or row.get("transcription") or "").strip()
-        if t:
-            texts.append(t)
+        t = row.get("text")
+        # Проверяем, что t не None и является строкой
+        if t and isinstance(t, str):
+            t = t.strip()
+            if t:
+                texts.append(t)
         if limit and len(texts) >= limit:
             break
     return texts
@@ -107,10 +105,13 @@ def load_texts(
         if limit:
             texts = texts[:limit]
         return texts
-    elif source == "fleurs":
-        return _load_fleurs(split=split, limit=limit)
+    elif source == "lenta2":
+        return _load_lenta2(split=split, limit=limit)
     else:
         raise ValueError(f"Неизвестный source: {source!r}")
+
+   
+    
 
 
 if __name__ == "__main__":

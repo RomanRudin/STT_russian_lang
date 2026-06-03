@@ -38,12 +38,3 @@ class STTPunctuationPipeline:
                 words: List[str] = stt_output["words"]
                 return " ".join(words)
         raise ValueError("Неподдерживаемый формат выхода STT")
-
-
-# Пример подключения реального Whisper (псевдокод, не выполняется офлайн):
-#
-#   import whisper
-#   asr = whisper.load_model("large-v3")
-#   res = asr.transcribe("audio.wav", language="ru")
-#   pipeline = STTPunctuationPipeline(restorer)
-#   final_text = pipeline({"text": res["text"]})

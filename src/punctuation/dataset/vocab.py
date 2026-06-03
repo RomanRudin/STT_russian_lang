@@ -43,7 +43,7 @@ class WordVocab:
         return len(self.token2id)
 
     @classmethod
-    def build(cls, texts: List[str], min_freq: int = 1) -> "WordVocab":
+    def build(cls, texts: List[str], min_freq: int = 1, max_size: int = 50000) -> "WordVocab":
         from collections import Counter
 
         counter: Counter = Counter()
@@ -51,7 +51,7 @@ class WordVocab:
             tokens, *_ = text_to_labeled(t)
             counter.update(tokens)
         token2id = {PAD: 0, UNK: 1}
-        for tok, freq in counter.most_common():
+        for tok, freq in counter.most_common(max_size):
             if freq >= min_freq:
                 token2id[tok] = len(token2id)
         return cls(token2id)
