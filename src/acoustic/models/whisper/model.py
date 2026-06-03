@@ -50,6 +50,12 @@ def build_whisper(cfg: Dict[str, Any]) -> Tuple[WhisperForConditionalGeneration,
 
     return model, processor
 
+def _whisper_generate(model, input_data, processor):
+    kwargs = {
+        'forced_decoder_ids': getattr(model.config, 'forced_decoder_ids', None),
+        'suppress_tokens': getattr(model.config, 'suppress_tokens', [])
+    }
+    return model.generate(input_data, **kwargs)
 
 def load_checkpoint(checkpoint_dir: str, cfg: Dict[str, Any]) -> Tuple[WhisperForConditionalGeneration, WhisperProcessor]:
     logger.info("Loading checkpoint from %s", checkpoint_dir)
@@ -63,3 +69,4 @@ def load_checkpoint(checkpoint_dir: str, cfg: Dict[str, Any]) -> Tuple[WhisperFo
     else:
         model = WhisperForConditionalGeneration.from_pretrained(checkpoint_dir)
     return model, processor
+

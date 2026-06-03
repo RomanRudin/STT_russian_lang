@@ -16,6 +16,8 @@ def get_trainer_class(name: str):
 # Register available trainers
 from .trainer import BaseTrainer
 from .trainers.whisper_trainer import WhisperTrainer
+from .trainers.wav2vec2_trainer import Wav2Vec2Trainer
 
 TRAINER_CLASSES.register("BaseTrainer", BaseTrainer)
 TRAINER_CLASSES.register("WhisperTrainer", WhisperTrainer)
+TRAINER_CLASSES.register("Wav2Vec2Trainer", Wav2Vec2Trainer)

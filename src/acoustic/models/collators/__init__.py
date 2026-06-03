@@ -8,5 +8,8 @@ def get_collator_class(name: str):
 
 # Manual registration
 from .whisper_collator import WhisperDataCollator
+from .wav2vec2_collator import Wav2Vec2DataCollator
+
 
 COLLATORS.register("whisper", WhisperDataCollator)
+COLLATORS.register("wav2vec2", Wav2Vec2DataCollator)

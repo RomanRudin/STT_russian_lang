@@ -1,0 +1,105 @@
+model:
+  name: "jonatasgrosman/wav2vec2-large-xlsr-53-russian"
+  builder: "wav2vec2"
+  collator: "wav2vec2"
+  language: "russian"
+  task: "transcribe"
+  use_lora: false
+  
+  freeze_feature_extractor: true
+  
+  collator_params:
+    augmentations:
+      gaussian_noise:
+        enabled: false
+        noise_level_min: 0.001
+        noise_level_max: 0.015
+        prob: 0.3
+      speed_perturb:
+        enabled: false
+        speed_range: [0.9, 1.1]
+        prob: 0.2
+      pitch_shift:
+        enabled: false
+        min_semitones: -4
+        max_semitones: 4
+        prob: 0.3
+      reverb:
+        enabled: false
+        prob: 0.2
+        rir_path: null
+      gain:
+        enabled: true
+        min_db: -10.0
+        max_db: 5.0
+        prob: 0.5
+      time_shift:
+        enabled: true
+        max_shift_ratio: 0.1
+        prob: 0.5
+
+dataset:
+  create_function: "combined_dataset"
+  filters:
+    - "duration_filter"
+    - "text_normalizer"
+  cache:
+    use_cache: true
+    cache_dir: "./acoustic/data/processed_wav2vec2"
+    force_recreate: false
+  sources:
+    fleurs:
+      enabled: true
+    golos:
+      enabled: false
+      path: null
+      subsets: ["crowd", "farfield"]
+      val_fraction: 0.02
+  params:
+    sample_rate: 16000
+    max_duration: 30.0
+    min_duration: 0.5
+  num_proc: 4
+
+training:
+  trainer: "Wav2Vec2Trainer"
+  output_dir: "./acoustic/checkpoints_w2v2"
+  logging_dir: "./acoustic/checkpoints_w2v2/logs"
+  experiment_name: "wav2vec2_verbatim"
+  
+  # Параметры батчей
+  per_device_train_batch_size: 2
+  per_device_eval_batch_size: 2
+  gradient_accumulation_steps: 8
+  
+  # Оптимизатор
+  learning_rate: 1.0e-4
+  warmup_steps: 500
+  num_train_epochs: 5
+  
+  eval_strategy: "epoch"
+  save_strategy: "epoch"
+  logging_strategy: "epoch"
+  fp16: false
+  dataloader_num_workers: 6
+  
+  load_best_model_at_end: true
+  metric_for_best_model: "wer"
+  greater_is_better: false
+  save_total_limit: 3
+  
+  # КРИТИЧНО ДЛЯ CTC: отключение генерации текста
+  predict_with_generate: false
+  resume_from: null
+  
+  metrics:
+    - "wer"
+    - "cer"
+    - "f1"
+    - "detailed_stats"
+    - "ser"
+    - "space_wer"
+    
+  callbacks:
+    - "tqdm"
+    - "eval_tqdm"

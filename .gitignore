@@ -1,5 +1,6 @@
 test
 checkpoints
+checkpoints*
 data
 
 __pycache__/
