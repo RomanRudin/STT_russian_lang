@@ -1,6 +1,6 @@
 # Model settings
 model:
-  name: "openai/whisper-tiny"
+  name: "openai/whisper-small"
   builder: "whisper" # ключ в MODEL_BUILDERS
   language: "russian"
   task: "transcribe"
@@ -69,11 +69,11 @@ training:
   output_dir: "./acoustic/checkpoints"
   logging_dir: "./acoustic/checkpoints/logs"
   experiment_name: "baseline"
-  per_device_train_batch_size: 12
-  per_device_eval_batch_size: 24
-  gradient_accumulation_steps: 2
-  learning_rate: 5.0e-5
-  warmup_steps: 250
+  per_device_train_batch_size: 4
+  per_device_eval_batch_size: 8
+  gradient_accumulation_steps: 4
+  learning_rate: 1.0e-5
+  warmup_steps: 500
   num_train_epochs: 5
   eval_strategy: "epoch"
   save_strategy: "epoch"
