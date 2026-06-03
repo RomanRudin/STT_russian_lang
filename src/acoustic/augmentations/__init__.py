@@ -30,8 +30,12 @@ from .gaussian_noise import GaussianNoise
 from .speed_perturb import SpeedPerturb
 from .pitch_shift import PitchShift
 from .reverberation import ReverbAugmentation
+from .gain import Gain
+from .time_shift import TimeShift
 
 AUGMENTATION_CLASSES.register("gaussian_noise", GaussianNoise)
 AUGMENTATION_CLASSES.register("speed_perturb", SpeedPerturb)
 AUGMENTATION_CLASSES.register("pitch_shift", PitchShift)
 AUGMENTATION_CLASSES.register("reverb", ReverbAugmentation)
+AUGMENTATION_CLASSES.register("gain", Gain)
+AUGMENTATION_CLASSES.register("time_shift", TimeShift)

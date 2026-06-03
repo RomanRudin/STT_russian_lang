@@ -1,6 +1,6 @@
 # Model settings
 model:
-  name: "openai/whisper-small"
+  name: "openai/whisper-tiny"
   builder: "whisper" # ключ в MODEL_BUILDERS
   language: "russian"
   task: "transcribe"
@@ -11,27 +11,36 @@ model:
     max_label_length: 225
     augmentations:
       gaussian_noise:
-        enabled: false
+        enabled: False
         noise_level_min: 0.001
         noise_level_max: 0.015
         prob: 0.3
       speed_perturb:
-        enabled: false
+        enabled: False
         speed_range: [0.9, 1.1]
         prob: 0.2
       pitch_shift:
-        enabled: false
+        enabled: False
         min_semitones: -4
         max_semitones: 4
         prob: 0.3
       reverb:
-        enabled: false
+        enabled: False
         prob: 0.2
         rir_path: null
+      gain:
+        enabled: True
+        min_db: -10.0
+        max_db: 5.0
+        prob: 0.5
+      time_shift:
+        enabled: True
+        max_shift_ratio: 0.1
+        prob: 0.5
 
 dataset:
-  max_train_samples: 100
-  max_eval_samples: 20 
+  #max_train_samples: 100
+  #max_eval_samples: 20 
   create_function: "combined_dataset" # ключ в реестре dataset
   filters:
     - "duration_filter"
@@ -60,17 +69,17 @@ training:
   output_dir: "./acoustic/checkpoints"
   logging_dir: "./acoustic/checkpoints/logs"
   experiment_name: "baseline"
-  per_device_train_batch_size: 4
-  per_device_eval_batch_size: 8
-  gradient_accumulation_steps: 8
-  learning_rate: 1.0e-5
-  warmup_steps: 500
+  per_device_train_batch_size: 12
+  per_device_eval_batch_size: 24
+  gradient_accumulation_steps: 2
+  learning_rate: 5.0e-5
+  warmup_steps: 250
   num_train_epochs: 5
   eval_strategy: "epoch"
   save_strategy: "epoch"
   logging_strategy: "epoch"
   fp16: false # false in any situation
-  dataloader_num_workers: 2 # 0 on Windows, >0 on Linux
+  dataloader_num_workers: 0
   load_best_model_at_end: true
   metric_for_best_model: "wer"
   greater_is_better: false
@@ -81,6 +90,10 @@ training:
   metrics:
     - "wer"
     - "cer"
+    - "f1"
+    - "detailed_stats"
+    - "ser"
+    - "space_wer"
   callbacks:
     - "tqdm"
     - "eval_tqdm"
