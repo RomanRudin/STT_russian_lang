@@ -4,9 +4,12 @@ data.py
 Подготовка данных для мультимодального восстановления пунктуации.
 
 Делает три вещи:
-  1. Загружает Google FLEURS (ru_ru) — пары (аудио, транскрипция с пунктуацией).
-  2. Из транскрипции извлекает целевые метки трёх голов
-     (пунктуация / абзац / капитализация) и «чистый» вход без пунктуации.
+  1. Загружает корпус русской начитанной речи. ОСНОВНОЙ корпус — M-AILABS
+     (русские аудиокниги: LibriVox/Gutenberg), где текст несёт ПОЛНУЮ книжную
+     пунктуацию (запятые, точки, ? ! …) и реальные абзацы. FLEURS оставлен как
+     опциональная добавка для разнообразия дикторов/тематики.
+  2. Из текста извлекает целевые метки трёх голов (пунктуация / абзац /
+     капитализация) и «чистый» вход без пунктуации.
   3. Выравнивает слова по времени (forced alignment отдельной либой) и считает
      акустические признаки на каждое слово (паузы, длительность, F0, энергия).
 
@@ -33,7 +36,7 @@ from typing import List, Dict, Optional, Tuple
 
 import numpy as np
 
-from modules.config import (
+from .config import (
     CHAR_TO_PUNCT,
     PUNCT2ID,
     PARA2ID,
@@ -151,6 +154,42 @@ def parse_transcription(
         for idx in paragraph_breaks:
             if 0 <= idx < len(words):
                 para_ids[idx] = PARA2ID["PARA"]
+
+    return words, punct_ids, para_ids, cap_ids
+
+
+def parse_document(raw_text: str) -> Tuple[List[str], List[int], List[int], List[int]]:
+    """
+    Разбор МНОГОАБЗАЦНОГО текста (книжный фрагмент M-AILABS).
+
+    В отличие от parse_transcription, дополнительно извлекает границы абзацев:
+    разрыв абзаца — это перевод строки (одинарный \\n или пустая строка между
+    блоками). Слово, начинающее новый абзац, помечается PARA. Так голова `para`
+    получает реальный обучающий сигнал (которого нет во FLEURS).
+
+    M-AILABS обычно отдаёт по одному предложению на сэмпл (абзацев нет), но если
+    несколько предложений склеены в один фрагмент с переносами — мы их используем.
+    """
+    # нормализуем разные переводы строк; пустые строки и одиночные \n считаем границей
+    text = unicodedata.normalize("NFC", raw_text.replace("\r\n", "\n").replace("\r", "\n"))
+    paragraphs = [p for p in re.split(r"\n\s*\n|\n", text) if p.strip()]
+
+    words: List[str] = []
+    punct_ids: List[int] = []
+    para_ids: List[int] = []
+    cap_ids: List[int] = []
+
+    for pi, para in enumerate(paragraphs):
+        pw, pp, _, pc = parse_transcription(para)
+        if not pw:
+            continue
+        # первое слово абзаца (кроме самого первого в документе) -> PARA
+        start_idx = len(words)
+        words.extend(pw); punct_ids.extend(pp); cap_ids.extend(pc)
+        para_block = [PARA2ID["NO_PARA"]] * len(pw)
+        if pi > 0 and start_idx > 0:
+            para_block[0] = PARA2ID["PARA"]
+        para_ids.extend(para_block)
 
     return words, punct_ids, para_ids, cap_ids
 
@@ -303,17 +342,76 @@ def _normalize_acoustic(raw: Dict[str, float]) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------
-# 3. Сборка примеров из FLEURS
+# 3. Загрузка корпусов (M-AILABS основной, FLEURS — опциональное смешивание)
 # ---------------------------------------------------------------------------
+def _pick_text_field(sample: Dict, candidates: List[str]) -> str:
+    """Возвращает значение первого присутствующего текстового поля."""
+    for name in candidates:
+        val = sample.get(name)
+        if isinstance(val, str) and val.strip():
+            return val
+    return ""
+
+
+def load_mailabs(cfg: DataConfig, split: str = "train", limit: Optional[int] = None):
+    """
+    Загружает M-AILABS (русские аудиокниги) с HuggingFace Hub.
+
+    M-AILABS обычно публикуется одним split 'train' — поэтому мы грузим train
+    целиком и сами нарезаем train/validation/test по долям val_ratio/test_ratio
+    (детерминированно, с фиксированным seed). `split` выбирает нужный кусок.
+
+    Возвращает HF Dataset (срез) либо None при недоступности всех зеркал.
+    """
+    try:
+        from datasets import load_dataset
+    except Exception as e:
+        print(f"[load_mailabs] библиотека datasets недоступна ({e}).")
+        return None
+
+    base = None
+    last_err = None
+    for repo in cfg.mailabs_repos:
+        try:
+            base = load_dataset(repo, split="train", cache_dir=cfg.cache_dir,
+                                trust_remote_code=True)
+            print(f"[load_mailabs] загружен репозиторий: {repo} ({len(base)} клипов).")
+            break
+        except Exception as e:
+            last_err = e
+            continue
+    if base is None:
+        print(f"[load_mailabs] не удалось загрузить M-AILABS ни с одного зеркала "
+              f"(последняя ошибка: {last_err}).")
+        return None
+
+    # детерминированный train/val/test split
+    base = base.shuffle(seed=42)
+    n = len(base)
+    n_test = int(n * cfg.test_ratio)
+    n_val = int(n * cfg.val_ratio)
+    bounds = {
+        "test": (0, n_test),
+        "validation": (n_test, n_test + n_val),
+        "train": (n_test + n_val, n),
+    }
+    lo, hi = bounds.get(split, bounds["train"])
+    ds = base.select(range(lo, hi))
+    if limit:
+        ds = ds.select(range(min(limit, len(ds))))
+    return ds
+
+
 def load_fleurs(cfg: DataConfig, split: str = "train", limit: Optional[int] = None):
     """
     Загружает FLEURS (ru_ru). Возвращает HF Dataset либо None при недоступности.
-    `limit` ограничивает число примеров (удобно для демо-прогона).
+    Оставлен для опционального СМЕШИВАНИЯ с M-AILABS (разнообразие дикторов/тем).
+    FLEURS почти не несёт ? ! … и абзацев — основной корпус теперь M-AILABS.
     """
     try:
         from datasets import load_dataset
         ds = load_dataset(
-            cfg.dataset_name, cfg.lang, split=split, cache_dir=cfg.cache_dir,
+            "google/fleurs", cfg.lang, split=split, cache_dir=cfg.cache_dir,
             trust_remote_code=True,
         )
         if limit:
@@ -324,80 +422,125 @@ def load_fleurs(cfg: DataConfig, split: str = "train", limit: Optional[int] = No
         return None
 
 
+def _sample_to_example(sample: Dict, idx: int, cfg: DataConfig,
+                       split: str, aligner_ok: bool, text_field: List[str],
+                       use_documents: bool) -> Optional[Example]:
+    """Превращает один HF-сэмпл в Example (с акустикой, если возможно)."""
+    raw = _pick_text_field(sample, text_field)
+    if not raw:
+        return None
+
+    # M-AILABS — книжный текст: пытаемся извлечь абзацы (use_documents=True);
+    # FLEURS — одно предложение: обычный parse_transcription.
+    if use_documents:
+        words, punct_ids, para_ids, cap_ids = parse_document(raw)
+    else:
+        words, punct_ids, para_ids, cap_ids = parse_transcription(raw)
+    if len(words) < cfg.min_words:
+        return None
+
+    has_ac = False
+    acoustic = np.zeros((len(words), ACOUSTIC_DIM), dtype=np.float32)
+    if aligner_ok and "audio" in sample and sample["audio"] is not None:
+        audio = np.asarray(sample["audio"]["array"], dtype=np.float32)
+        sr = sample["audio"].get("sampling_rate", cfg.sample_rate)
+        cache_path = os.path.join(cfg.alignment_dir, f"{split}_{idx}.json")
+        word_ts = forced_align(audio, sr, words, cache_path=cache_path)
+        if word_ts:
+            acoustic = compute_acoustic_features(audio, sr, word_ts, words)
+            has_ac = True
+
+    return Example(
+        words=words, punct_ids=punct_ids, para_ids=para_ids,
+        cap_ids=cap_ids, acoustic=acoustic, has_acoustic=has_ac,
+        meta={"id": sample.get("id", idx)},
+    )
+
+
 def build_examples(
     cfg: DataConfig,
     split: str = "train",
     limit: Optional[int] = None,
     use_alignment: bool = True,
+    source: str = "mailabs",
+    mix_fleurs: bool = False,
 ) -> List[Example]:
     """
     Главная функция модуля. Возвращает список Example для обучения/оценки.
 
-    Логика:
-      * грузим FLEURS;
-      * на каждый сэмпл парсим транскрипцию -> метки + чистые слова;
-      * при use_alignment делаем forced alignment и считаем акустику;
-      * иначе (или при ошибке) — нулевые признаки (text-only).
+    Параметры
+    ---------
+    source       : основной корпус — "mailabs" (по умолчанию) или "fleurs".
+    mix_fleurs   : если True и source="mailabs", добавляет FLEURS для разнообразия.
+    use_alignment: при True и установленном forced-aligner считает акустику
+                   (паузы/F0/энергия); иначе — text-only (нулевые признаки).
 
-    Про абзацы: FLEURS — это отдельные предложения без разметки абзацев,
-    поэтому para_ids здесь почти всегда NO_PARA. Голова абзаца остаётся в
-    модели рабочей; для реального обучения абзацам нужен корпус с абзацами
-    (книги/субтитры) — это отдельный источник, легко добавить тем же Example.
+    M-AILABS (аудиокниги) несёт полную пунктуацию (? ! …) и реальные абзацы,
+    поэтому классы QUESTION/EXCLAM/ELLIPSIS и голова PARA получают сигнал —
+    в отличие от FLEURS.
     """
-    ds = load_fleurs(cfg, split=split, limit=limit)
-    examples: List[Example] = []
-
-    if ds is None:
-        if cfg.allow_text_only:
-            print("[build_examples] FLEURS недоступен — возвращаю демо-примеры (text-only).")
-            return _demo_examples()
-        raise RuntimeError("FLEURS недоступен и text-only запрещён в конфиге.")
-
     aligner_ok = (_try_import_aligner() is not None) if use_alignment else False
     if use_alignment and not aligner_ok:
         print("[build_examples] forced-aligner не установлен — text-only режим.")
 
-    for idx, sample in enumerate(ds):
-        raw_tr = sample.get("raw_transcription") or sample.get("transcription") or ""
-        words, punct_ids, para_ids, cap_ids = parse_transcription(raw_tr)
-        if len(words) < 2:
-            continue
+    examples: List[Example] = []
 
-        has_ac = False
-        acoustic = np.zeros((len(words), ACOUSTIC_DIM), dtype=np.float32)
+    # --- основной корпус ---
+    if source == "mailabs":
+        ds = load_mailabs(cfg, split=split, limit=limit)
+        if ds is not None:
+            for idx, sample in enumerate(ds):
+                ex = _sample_to_example(sample, idx, cfg, split, aligner_ok,
+                                        cfg.text_field_candidates, use_documents=True)
+                if ex:
+                    examples.append(ex)
+    elif source == "fleurs":
+        ds = load_fleurs(cfg, split=split, limit=limit)
+        if ds is not None:
+            for idx, sample in enumerate(ds):
+                ex = _sample_to_example(sample, idx, cfg, split, aligner_ok,
+                                        ["raw_transcription", "transcription"],
+                                        use_documents=False)
+                if ex:
+                    examples.append(ex)
 
-        if aligner_ok and "audio" in sample:
-            audio = np.asarray(sample["audio"]["array"], dtype=np.float32)
-            sr = sample["audio"].get("sampling_rate", cfg.sample_rate)
-            cache_path = os.path.join(cfg.alignment_dir, f"{split}_{idx}.json")
-            word_ts = forced_align(audio, sr, words, cache_path=cache_path)
-            if word_ts:
-                acoustic = compute_acoustic_features(audio, sr, word_ts, words)
-                has_ac = True
+    # --- опциональное смешивание с FLEURS ---
+    if source == "mailabs" and mix_fleurs:
+        ds_f = load_fleurs(cfg, split=split if split != "validation" else "validation",
+                           limit=limit)
+        if ds_f is not None:
+            for idx, sample in enumerate(ds_f):
+                ex = _sample_to_example(sample, 10_000_000 + idx, cfg, split, aligner_ok,
+                                        ["raw_transcription", "transcription"],
+                                        use_documents=False)
+                if ex:
+                    examples.append(ex)
 
-        examples.append(
-            Example(
-                words=words, punct_ids=punct_ids, para_ids=para_ids,
-                cap_ids=cap_ids, acoustic=acoustic, has_acoustic=has_ac,
-                meta={"id": sample.get("id", idx)},
-            )
-        )
-    print(f"[build_examples] собрано {len(examples)} примеров "
+    # --- fallback: ничего не загрузилось ---
+    if not examples:
+        if cfg.allow_text_only:
+            print("[build_examples] корпус недоступен — возвращаю демо-примеры (text-only).")
+            return _demo_examples()
+        raise RuntimeError("Корпус недоступен и text-only запрещён в конфиге.")
+
+    print(f"[build_examples] собрано {len(examples)} примеров из '{source}'"
+          f"{' + fleurs' if (source=='mailabs' and mix_fleurs) else ''} "
           f"({'с акустикой' if aligner_ok else 'text-only'}).")
     return examples
 
 
 def _demo_examples() -> List[Example]:
-    """Несколько примеров «на сухую», чтобы код запускался без сети/датасета."""
-    demo = [
-        "Привет, как дела? Я давно тебя не видел!",
-        "Сегодня хорошая погода. Может, прогуляемся по набережной…",
-        "Что это было? Невероятно! Я не ожидал такого поворота событий.",
+    """Несколько примеров «на сухую», чтобы код запускался без сети/датасета.
+    Используем parse_document, чтобы продемонстрировать и метки абзацев (PARA)."""
+    demo_docs = [
+        "Привет, как дела? Я давно тебя не видел!\nСегодня хорошая погода. "
+        "Может, прогуляемся по набережной…",
+        "Что это было? Невероятно! Я не ожидал такого поворота событий.\n"
         "Москва — столица России, крупный экономический центр.",
     ]
     out = []
-    for t in demo:
-        words, p, par, cap = parse_transcription(t)
+    for t in demo_docs:
+        words, p, par, cap = parse_document(t)
         out.append(Example(words, p, par, cap,
                            np.zeros((len(words), ACOUSTIC_DIM), np.float32),
                            has_acoustic=False))

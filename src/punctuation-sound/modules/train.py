@@ -20,7 +20,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-from .config import TrainConfig, IGNORE_INDEX
+from .config import TrainConfig, IGNORE_INDEX, NUM_PUNCT, NUM_PARA, NUM_CAP
 
 
 def set_seed(seed: int) -> None:
@@ -35,14 +35,91 @@ def _resolve_device(name: str) -> torch.device:
     return torch.device(name)
 
 
-def build_loss(cfg: TrainConfig, device: torch.device):
-    """Возвращает три CrossEntropy (с весами классов для пунктуации)."""
-    w = torch.tensor(cfg.punct_class_weights, dtype=torch.float32, device=device)
-    return {
-        "punct": nn.CrossEntropyLoss(weight=w, ignore_index=IGNORE_INDEX),
-        "para": nn.CrossEntropyLoss(ignore_index=IGNORE_INDEX),
-        "cap": nn.CrossEntropyLoss(ignore_index=IGNORE_INDEX),
-    }
+class FocalLoss(nn.Module):
+    """
+    Focal Loss (Lin et al., 2017) для token-classification с дисбалансом.
+
+    CE штрафует все ошибки одинаково, и модель «залипает» на доминирующем
+    классе O. Focal домножает потерю на (1 - p_t)^gamma: легко угаданные
+    примеры (уверенный O) почти не дают градиента, а трудные редкие знаки —
+    дают. Это обычно лучший рычаг против перекоса классов на нашей задаче.
+
+    weight   : веса классов (как в CrossEntropy), опционально.
+    gamma    : сила фокусировки (0 -> обычный взвешенный CE).
+    """
+
+    def __init__(self, weight: Optional[torch.Tensor] = None,
+                 gamma: float = 2.0, ignore_index: int = IGNORE_INDEX):
+        super().__init__()
+        self.weight = weight
+        self.gamma = gamma
+        self.ignore_index = ignore_index
+
+    def forward(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        # logits: (N, C), target: (N,)
+        logp = torch.nn.functional.log_softmax(logits, dim=-1)
+        ce = torch.nn.functional.nll_loss(
+            logp, target, weight=self.weight,
+            ignore_index=self.ignore_index, reduction="none",
+        )
+        # p_t = вероятность истинного класса
+        valid = target != self.ignore_index
+        pt = torch.zeros_like(ce)
+        if valid.any():
+            idx = target[valid].clamp_min(0)
+            pt[valid] = logp[valid].gather(1, idx.unsqueeze(1)).squeeze(1).exp()
+        focal = ((1 - pt) ** self.gamma) * ce
+        return focal[valid].mean() if valid.any() else focal.sum() * 0.0
+
+
+def compute_class_weights(examples, head: str, num_classes: int,
+                          cap: float = 10.0) -> torch.Tensor:
+    """
+    Автоматические веса классов по обратной частоте в train.
+
+    head : 'punct' | 'para' | 'cap' — какое поле Example агрегировать.
+    Возвращает тензор весов длины num_classes, нормированный к среднему 1,
+    с обрезкой сверху (cap), чтобы сверхредкие классы не взрывали лосс.
+    """
+    counts = np.zeros(num_classes, dtype=np.float64)
+    attr = {"punct": "punct_ids", "para": "para_ids", "cap": "cap_ids"}[head]
+    for ex in examples:
+        for lab in getattr(ex, attr):
+            if 0 <= lab < num_classes:
+                counts[lab] += 1
+    counts = np.maximum(counts, 1.0)             # избегаем деления на ноль
+    inv = counts.sum() / counts                  # обратная частота
+    inv = np.sqrt(inv)                           # сглаживание (мягче, чем чистая 1/freq)
+    inv = inv / inv.mean()                       # нормировка к среднему 1
+    inv = np.clip(inv, 0.3, cap)
+    return torch.tensor(inv, dtype=torch.float32)
+
+
+def build_loss(cfg: TrainConfig, device: torch.device,
+               train_examples=None) -> Dict:
+    """
+    Возвращает три функции потерь (по одной на голову).
+
+    Тип задаётся cfg.loss_type ('focal' | 'ce'). Веса классов берутся
+    автоматически по частоте в train (cfg.auto_class_weights=True) либо из
+    cfg.punct_class_weights для пунктуации.
+    """
+    # веса классов
+    if cfg.auto_class_weights and train_examples is not None:
+        w_punct = compute_class_weights(train_examples, "punct", NUM_PUNCT).to(device)
+        w_para = compute_class_weights(train_examples, "para", NUM_PARA).to(device) if cfg.balance_para_cap else None
+        w_cap = compute_class_weights(train_examples, "cap", NUM_CAP).to(device) if cfg.balance_para_cap else None
+    else:
+        w_punct = torch.tensor(cfg.punct_class_weights, dtype=torch.float32, device=device)
+        w_para = None
+        w_cap = None
+
+    def make(weight):
+        if cfg.loss_type == "focal":
+            return FocalLoss(weight=weight, gamma=cfg.focal_gamma, ignore_index=IGNORE_INDEX)
+        return nn.CrossEntropyLoss(weight=weight, ignore_index=IGNORE_INDEX)
+
+    return {"punct": make(w_punct), "para": make(w_para), "cap": make(w_cap)}
 
 
 def compute_loss(logits: Dict[str, torch.Tensor], batch: Dict,
@@ -68,16 +145,24 @@ def train_model(
     val_loader: Optional[DataLoader] = None,
     is_pretrained: bool = False,
     eval_fn: Optional[Callable] = None,
+    train_examples=None,
 ) -> nn.Module:
     """
     Обучает модель `cfg.epochs` эпох. Для предобученных моделей задаёт
     раздельные lr (энкодер vs головы) и линейный warmup.
     Возвращает обученную модель (лучшую по val, если задан eval_fn+val_loader).
+
+    train_examples : список Example для автоподбора весов классов
+                     (cfg.auto_class_weights). Можно не передавать — тогда
+                     берутся ручные cfg.punct_class_weights.
     """
     set_seed(cfg.seed)
     device = _resolve_device(cfg.device)
     model.to(device)
-    loss_fns = build_loss(cfg, device)
+    loss_fns = build_loss(cfg, device, train_examples=train_examples)
+    print(f"[train] loss={cfg.loss_type}"
+          f"{f' (gamma={cfg.focal_gamma})' if cfg.loss_type=='focal' else ''}, "
+          f"auto_class_weights={cfg.auto_class_weights and train_examples is not None}")
 
     # Оптимизатор
     if is_pretrained and hasattr(model, "param_groups"):

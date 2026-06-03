@@ -70,11 +70,21 @@ def evaluate(model, loader: DataLoader, device) -> Dict[str, float]:
             metrics[f"{head}_f1_macro"] = 0.0
             continue
         p, r, f, sup = _per_class_prf(preds, golds, num)
-        # macro по классам, исключая «пустой» класс (O / NO_PARA / LOWER),
-        # чтобы метрика отражала качество именно на знаках, а не на доминанте.
-        sig = list(range(1, num))
-        metrics[f"{head}_f1_macro"] = float(np.mean([f[c] for c in sig])) if sig else float(f.mean())
+        # macro по «значимым» классам (исключая пустой класс O / NO_PARA / LOWER),
+        # НО только по тем, что реально присутствуют в данных (support > 0).
+        # Иначе классы без примеров (например QUESTION при support=0) механически
+        # тянут macro-F1 в ноль и создают ложное впечатление плохого качества.
+        sig_present = [c for c in range(1, num) if sup[c] > 0]
+        if sig_present:
+            metrics[f"{head}_f1_macro"] = float(np.mean([f[c] for c in sig_present]))
+        else:
+            # ни одного значимого класса в данных — отдаём F1 по присутствующим вообще
+            present = [c for c in range(num) if sup[c] > 0]
+            metrics[f"{head}_f1_macro"] = float(np.mean([f[c] for c in present])) if present else 0.0
+        # для справки также «наивный» macro по всем значимым классам (как было)
+        metrics[f"{head}_f1_macro_allclasses"] = float(np.mean([f[c] for c in range(1, num)])) if num > 1 else float(f.mean())
         metrics[f"{head}_acc"] = float(np.mean(preds == golds))
+        metrics[f"{head}_n_present"] = int(len(sig_present))
         for c, name in enumerate(labels):
             metrics[f"{head}/{name}_f1"] = float(f[c])
             metrics[f"{head}/{name}_p"] = float(p[c])
@@ -86,18 +96,25 @@ def evaluate(model, loader: DataLoader, device) -> Dict[str, float]:
 def pretty_report(metrics: Dict[str, float]) -> str:
     """Человекочитаемая таблица по трём головам."""
     lines = []
+    lines.append("ВНИМАНИЕ: accuracy на этой задаче обманчива — класс «нет знака» (O)")
+    lines.append("преобладает (~80-90%), поэтому ориентируйтесь на recall/F1 по классам")
+    lines.append("знаков и на macro-F1 (он считается только по присутствующим классам).")
     specs = {"punct": PUNCT_LABELS, "para": PARA_LABELS, "cap": CAP_LABELS}
     for head, labels in specs.items():
+        n_present = metrics.get(head + "_n_present", 0)
         lines.append(f"\n=== {head.upper()} "
-                     f"(macro-F1={metrics.get(head + '_f1_macro', 0):.3f}, "
+                     f"(macro-F1={metrics.get(head + '_f1_macro', 0):.3f} "
+                     f"по {n_present} присутствующим классам, "
                      f"acc={metrics.get(head + '_acc', 0):.3f}) ===")
         lines.append(f"{'class':<12}{'P':>8}{'R':>8}{'F1':>8}{'support':>10}")
         for name in labels:
+            sup = metrics.get(f'{head}/{name}_sup', 0)
+            tag = "  (нет в данных)" if sup == 0 else ""
             lines.append(
                 f"{name:<12}"
                 f"{metrics.get(f'{head}/{name}_p', 0):>8.3f}"
                 f"{metrics.get(f'{head}/{name}_r', 0):>8.3f}"
                 f"{metrics.get(f'{head}/{name}_f1', 0):>8.3f}"
-                f"{metrics.get(f'{head}/{name}_sup', 0):>10}"
+                f"{sup:>10}{tag}"
             )
     return "\n".join(lines)

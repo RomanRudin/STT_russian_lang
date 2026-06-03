@@ -163,10 +163,22 @@ class TrainConfig:
     w_punct: float = 1.0
     w_para: float = 0.5
     w_cap: float = 0.5
-    # Веса классов пунктуации в CrossEntropy (класс O сильно преобладает).
+
+    # --- борьба с дисбалансом классов (главная проблема на этой задаче) ---
+    # Тип лосса: "ce" (CrossEntropy с весами классов) или "focal" (Focal Loss).
+    # Focal Loss обычно лучше при сильном перекосе в сторону класса O.
+    loss_type: str = "focal"
+    focal_gamma: float = 2.0       # сила фокусировки на трудных примерах
+
+    # Веса классов пунктуации. Если auto_class_weights=True, веса считаются
+    # автоматически по обратной частоте классов в train (см. train.compute_class_weights)
+    # и эти ручные значения игнорируются.
+    auto_class_weights: bool = True
     punct_class_weights: List[float] = field(
         default_factory=lambda: [0.3, 1.0, 1.0, 2.0, 2.0, 2.0]
     )
+    # То же для голов para/cap (по умолчанию автоподбор при auto_class_weights).
+    balance_para_cap: bool = True
 
 
 # ---------------------------------------------------------------------------
@@ -175,14 +187,36 @@ class TrainConfig:
 
 @dataclass
 class DataConfig:
-    dataset_name: str = "google/fleurs"
+    # --- основной корпус: M-AILABS (русские аудиокниги) ---
+    # Источник — LibriVox/Gutenberg: художественные тексты с ПОЛНОЙ пунктуацией
+    # (запятые, точки, ? ! …) и реальными абзацами. Поэтому, в отличие от FLEURS,
+    # классы QUESTION/EXCLAM/ELLIPSIS и голова PARA получают реальный сигнал.
+    dataset_name: str = "google/fleurs"   # оставлен для совместимости/смешивания
     lang: str = "ru_ru"
+
+    # Имена загрузок M-AILABS (ru) на HuggingFace Hub. Перебираются по порядку:
+    # берётся первая, которая успешно загрузится (зеркала бывают разными).
+    mailabs_repos: List[str] = field(default_factory=lambda: [
+        "Vikhrmodels/m-ailabs_ru",
+        "espnet/m-ailabs_ru",
+        "mailabs/ru_RU",
+    ])
+    # Возможные имена текстового поля в разных загрузках M-AILABS.
+    text_field_candidates: List[str] = field(default_factory=lambda: [
+        "sentence", "transcription", "raw_transcription", "text",
+    ])
+    # M-AILABS обычно идёт одним split 'train' — делим сами.
+    val_ratio: float = 0.1
+    test_ratio: float = 0.1
+
     cache_dir: str = "./.cache"
     # Каталог, куда forced-aligner кладёт пословные тайминги (json на сэмпл).
     alignment_dir: str = "./.alignments"
     # Если выравнивание недоступно — обучаемся в text-only режиме (фичи = нули).
     allow_text_only: bool = True
     sample_rate: int = 16000
+    # Минимальная длина примера в словах (короткие реплики отбрасываем).
+    min_words: int = 3
 
 
 # Единый удобный контейнер.
