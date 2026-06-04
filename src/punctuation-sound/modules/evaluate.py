@@ -39,7 +39,7 @@ def _per_class_prf(preds: np.ndarray, golds: np.ndarray, num_classes: int):
 
 
 @torch.no_grad()
-def evaluate(model, loader: DataLoader, device) -> Dict[str, float]:
+def evaluate(model, loader: DataLoader, device, show_progress: bool = True) -> Dict[str, float]:
     """
     Прогоняет loader, собирает предсказания трёх голов и считает метрики.
     Возвращает плоский словарь чисел (для логов/сравнения экспериментов).
@@ -47,7 +47,15 @@ def evaluate(model, loader: DataLoader, device) -> Dict[str, float]:
     model.eval()
     buckets = {h: {"pred": [], "gold": []} for h in ("punct", "para", "cap")}
 
-    for batch in loader:
+    iterator = loader
+    if show_progress:
+        try:
+            from tqdm.auto import tqdm
+            iterator = tqdm(loader, desc="оценка", leave=False, unit="batch")
+        except Exception:
+            pass
+
+    for batch in iterator:
         batch = {k: (v.to(device) if torch.is_tensor(v) else v) for k, v in batch.items()}
         logits = model(**batch)
         for head in buckets:

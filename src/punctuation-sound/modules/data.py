@@ -50,6 +50,15 @@ from .config import (
 )
 
 
+def _progress(iterable, desc: str, total: Optional[int] = None):
+    """Оборачивает итерируемое в tqdm (если установлен), иначе возвращает как есть."""
+    try:
+        from tqdm.auto import tqdm
+        return tqdm(iterable, desc=desc, total=total, unit="клип", leave=True)
+    except Exception:
+        return iterable
+
+
 # ---------------------------------------------------------------------------
 # Структура одного обучающего примера
 # ---------------------------------------------------------------------------
@@ -208,6 +217,33 @@ def _try_import_aligner():
         return None
 
 
+_ALIGNER_CACHE = {}  # кэш загруженной модели выравнивания (грузим один раз)
+
+
+def _get_aligner():
+    """Лениво загружает и кэширует модель выравнивания (один раз на процесс)."""
+    if "model" in _ALIGNER_CACHE:
+        return _ALIGNER_CACHE
+
+    import torch
+    from ctc_forced_aligner import load_alignment_model
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    dtype = torch.float16 if device == "cuda" else torch.float32
+    loaded = load_alignment_model(device, dtype=dtype)
+    # разные версии возвращают (model, tokenizer) или (model, tokenizer, dictionary)
+    if len(loaded) == 3:
+        model, tokenizer, dictionary = loaded
+    else:
+        model, tokenizer = loaded
+        dictionary = tokenizer
+    _ALIGNER_CACHE.update(
+        {"model": model, "tokenizer": tokenizer, "dictionary": dictionary,
+         "device": device, "dtype": dtype, "batch_size": 8}
+    )
+    return _ALIGNER_CACHE
+
+
 def forced_align(
     audio: np.ndarray,
     sample_rate: int,
@@ -218,8 +254,9 @@ def forced_align(
     Возвращает список словарей {word, start, end} (сек) или None, если
     выравнивание недоступно. Результат кэшируется на диск (json).
 
-    Реализация на ctc-forced-aligner. Для другого выравнивателя (WhisperX,
-    MFA) достаточно переписать тело — формат выхода зафиксирован.
+    Реализация на ctc-forced-aligner (актуальный API). Модель выравнивания
+    грузится один раз и кэшируется в памяти (_get_aligner). Для другого
+    выравнивателя достаточно переписать тело — формат выхода зафиксирован.
     """
     if cache_path and os.path.exists(cache_path):
         with open(cache_path, "r", encoding="utf-8") as f:
@@ -232,23 +269,30 @@ def forced_align(
     try:
         import torch
         from ctc_forced_aligner import (
-            load_alignment_model,
-            generate_emissions,
-            preprocess_text,
-            get_alignments,
-            get_spans,
-            postprocess_results,
+            generate_emissions, preprocess_text,
+            get_alignments, get_spans, postprocess_results,
         )
 
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        model, tokenizer = load_alignment_model(device, dtype=torch.float32)
+        al = _get_aligner()
+        model, tokenizer, dictionary = al["model"], al["tokenizer"], al["dictionary"]
 
-        wav = torch.from_numpy(audio).float()
-        emissions, stride = generate_emissions(model, wav, device=device)
+        # аудио -> тензор нужного dtype/девайса; при необходимости ресемпл в 16к
+        wav_np = np.asarray(audio, dtype=np.float32)
+        if sample_rate != 16000:
+            try:
+                import librosa
+                wav_np = librosa.resample(wav_np, orig_sr=sample_rate, target_sr=16000)
+            except Exception:
+                pass
+        wav = torch.from_numpy(wav_np).to(device=model.device, dtype=model.dtype)
+
+        # АКТУАЛЬНАЯ сигнатура: без device, со batch_size
+        emissions, stride = generate_emissions(model, wav, batch_size=al["batch_size"])
+
         tokens_starred, text_starred = preprocess_text(
-            " ".join(words), romanize=True, language="rus"
+            " ".join(words), romanize=True, language="rus",
         )
-        segments, scores, blank = get_alignments(emissions, tokens_starred, tokenizer)
+        segments, scores, blank = get_alignments(emissions, tokens_starred, dictionary)
         spans = get_spans(tokens_starred, segments, blank)
         word_ts = postprocess_results(text_starred, spans, stride, scores)
 
@@ -562,7 +606,9 @@ def examples_from_pkl(pkl_path: str, cfg: DataConfig,
     # досчитываем акустику
     import soundfile as sf
     done = 0
-    for i, ex in enumerate(examples):
+    bar = _progress(list(enumerate(examples)), "forced-align (акустика)",
+                    total=len(examples))
+    for i, ex in bar:
         wav = ex.meta.get("audio_path")
         if not wav or not os.path.exists(wav):
             continue
@@ -576,6 +622,8 @@ def examples_from_pkl(pkl_path: str, cfg: DataConfig,
                 ex.acoustic = compute_acoustic_features(audio, sr, word_ts, ex.words)
                 ex.has_acoustic = True
                 done += 1
+                if hasattr(bar, "set_postfix"):
+                    bar.set_postfix(готово=done)
         except Exception:
             continue
     print(f"[examples_from_pkl] загружено {len(examples)}, акустика посчитана для {done}.")
@@ -679,12 +727,14 @@ def build_examples(
         print("[build_examples] forced-aligner не установлен — text-only режим.")
 
     examples: List[Example] = []
+    desc = f"подготовка [{split}]" + (" + align" if aligner_ok else " (text-only)")
 
     # --- основной корпус ---
     if source == "ruls":
         ds, _is_hf = load_ruls(cfg, split=split, limit=limit)
         if ds is not None:
-            for idx, sample in enumerate(ds):
+            total = len(ds) if hasattr(ds, "__len__") else None
+            for idx, sample in enumerate(_progress(ds, desc, total)):
                 ex = _sample_to_example(sample, idx, cfg, split, aligner_ok,
                                         cfg.text_field_candidates, use_documents=False)
                 if ex:
@@ -692,7 +742,8 @@ def build_examples(
     elif source == "fleurs":
         ds = load_fleurs(cfg, split=split, limit=limit)
         if ds is not None:
-            for idx, sample in enumerate(ds):
+            total = len(ds) if hasattr(ds, "__len__") else None
+            for idx, sample in enumerate(_progress(ds, desc, total)):
                 ex = _sample_to_example(sample, idx, cfg, split, aligner_ok,
                                         ["raw_transcription", "transcription"],
                                         use_documents=False)
@@ -704,7 +755,8 @@ def build_examples(
         ds_f = load_fleurs(cfg, split=split if split != "validation" else "validation",
                            limit=limit)
         if ds_f is not None:
-            for idx, sample in enumerate(ds_f):
+            total = len(ds_f) if hasattr(ds_f, "__len__") else None
+            for idx, sample in enumerate(_progress(ds_f, "подготовка [fleurs-mix]", total)):
                 ex = _sample_to_example(sample, 10_000_000 + idx, cfg, split, aligner_ok,
                                         ["raw_transcription", "transcription"],
                                         use_documents=False)
@@ -729,14 +781,14 @@ def _demo_examples(n_repeat: int = 60) -> List[Example]:
     Запасные примеры, чтобы код исполнялся без сети/датасета.
 
     ВАЖНО: это НЕ настоящий корпус. Если build_examples вернул их — значит
-    M-AILABS не загрузился, и любые метрики на них бессмысленны (фактически
+    RuLS не загрузился, и любые метрики на них бессмысленны (фактически
     обучение на горстке предложений). Размножаем до n_repeat, чтобы хотя бы
     не падал цикл обучения, и громко предупреждаем.
     """
     print("=" * 70)
-    print("ВНИМАНИЕ: используются ДЕМО-примеры (M-AILABS не загрузился).")
+    print("ВНИМАНИЕ: используются ДЕМО-примеры (RuLS не загрузился).")
     print("Это НЕ реальный корпус — метрики на них не имеют смысла.")
-    print("Укажите рабочее имя датасета в cfg.data.mailabs_repos и перезапустите.")
+    print("Запустите prepare_ruls.py или проверьте доступ к OpenSLR/HF, затем перезапустите.")
     print("=" * 70)
     demo_docs = [
         "Привет, как дела? Я давно тебя не видел!\nСегодня хорошая погода. "

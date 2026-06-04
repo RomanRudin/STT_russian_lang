@@ -129,7 +129,17 @@ def build(root, limit_train=None):
     counts = {"train": 0, "validation": 0, "test": 0}
     used_field = None
     by_split = {"train": [], "validation": [], "test": []}
-    for row, wav, split in iter_manifests(root):
+
+    # материализуем все записи манифестов, чтобы показать прогресс с total
+    print("[build] чтение манифестов ...")
+    rows = list(iter_manifests(root))
+    try:
+        from tqdm.auto import tqdm
+        rows_iter = tqdm(rows, desc="разбор транскрипций", unit="клип")
+    except Exception:
+        rows_iter = rows
+
+    for row, wav, split in rows_iter:
         text, fld = pick_text(row)
         if not text:
             continue

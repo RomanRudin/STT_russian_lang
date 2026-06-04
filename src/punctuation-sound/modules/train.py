@@ -23,6 +23,17 @@ from torch.utils.data import DataLoader
 from .config import TrainConfig, IGNORE_INDEX, NUM_PUNCT, NUM_PARA, NUM_CAP
 
 
+def _get_tqdm():
+    """Возвращает tqdm (авто-вариант для ноутбука) либо безопадную заглушку."""
+    try:
+        from tqdm.auto import tqdm
+        return tqdm
+    except Exception:
+        def _noop(iterable=None, **kwargs):
+            return iterable if iterable is not None else None
+        return _noop
+
+
 def set_seed(seed: int) -> None:
     random.seed(seed); np.random.seed(seed)
     torch.manual_seed(seed); torch.cuda.manual_seed_all(seed)
@@ -186,10 +197,13 @@ def train_model(
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
     best_score, best_state = -1.0, None
+    tqdm = _get_tqdm()
     for epoch in range(1, cfg.epochs + 1):
         model.train()
         running = 0.0
-        for batch in train_loader:
+        pbar = tqdm(train_loader, desc=f"эпоха {epoch}/{cfg.epochs}",
+                    leave=False, unit="batch")
+        for step, batch in enumerate(pbar, 1):
             batch = _to_device(batch, device)
             optimizer.zero_grad()
             logits = model(**batch)
@@ -199,6 +213,10 @@ def train_model(
             optimizer.step()
             scheduler.step()
             running += loss.item()
+            # живой средний loss в самом баре (если tqdm настоящий)
+            if hasattr(pbar, "set_postfix"):
+                pbar.set_postfix(loss=f"{running/step:.4f}",
+                                 lr=f"{scheduler.get_last_lr()[0]:.2e}")
 
         avg = running / max(len(train_loader), 1)
         msg = f"[epoch {epoch}/{cfg.epochs}] train_loss={avg:.4f}"
