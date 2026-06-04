@@ -1,6 +1,7 @@
 test
 checkpoints
 data
+*.tar.gz
 
 __pycache__/
 *.py[codz]

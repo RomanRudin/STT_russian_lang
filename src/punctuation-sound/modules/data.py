@@ -4,10 +4,12 @@ data.py
 Подготовка данных для мультимодального восстановления пунктуации.
 
 Делает три вещи:
-  1. Загружает корпус русской начитанной речи. ОСНОВНОЙ корпус — M-AILABS
-     (русские аудиокниги: LibriVox/Gutenberg), где текст несёт ПОЛНУЮ книжную
-     пунктуацию (запятые, точки, ? ! …) и реальные абзацы. FLEURS оставлен как
-     опциональная добавка для разнообразия дикторов/тематики.
+  1. Загружает корпус русской начитанной речи. ОСНОВНОЙ корпус — Russian
+     LibriSpeech (RuLS, аудиокниги LibriVox). КЛЮЧЕВОЕ: у RuLS есть поле
+     text_no_preprocessing — оригинальный текст С ПОЛНОЙ пунктуацией
+     (запятые, точки, ? ! …) и капитализацией; именно его мы используем как
+     целевую разметку. Поле text (нормализованное, без пунктуации) НЕ годится.
+     FLEURS оставлен как опциональная добавка.
   2. Из текста извлекает целевые метки трёх голов (пунктуация / абзац /
      капитализация) и «чистый» вход без пунктуации.
   3. Выравнивает слова по времени (forced alignment отдельной либой) и считает
@@ -353,186 +355,200 @@ def _pick_text_field(sample: Dict, candidates: List[str]) -> str:
     return ""
 
 
-def load_mailabs_from_archive(cfg: DataConfig, limit: Optional[int] = None):
+def _ruls_iter_manifest(root: str):
     """
-    Загружает русский M-AILABS напрямую из официального архива caito.de
-    (НЕ через HuggingFace Hub — работает, когда Hub недоступен).
+    Идёт по распакованному RuLS и выдаёт сэмплы {text, audio_path, split}.
 
-    Качает ru_RU.tgz (~оф. источник, формат LJSpeech: дерево папок с wavs/ и
-    metadata.csv вида `id|оригинальный_текст|нормализованный_текст`), распаковывает
-    в cfg.cache_dir и собирает список dict-сэмплов {sentence, audio_path}.
+    RuLS (формат NeMo) содержит JSON/JSONL-манифесты (manifest.json,
+    train/dev/test.jsonl и т.п.) со строками-объектами вида:
+      {"audio_filepath": "...wav", "duration": ..., "text": "...",
+       "text_no_preprocessing": "оригинал С пунктуацией"}.
+    На случай LibriSpeech-стиля (*.trans.txt) есть запасной парсер.
 
-    Возвращает список сэмплов (не HF Dataset) либо None. Аудио читается лениво
-    при вычислении акустики; для text-only режима аудио не нужно.
+    Поле text_no_preprocessing (с пунктуацией) приоритетно — см. cfg.
+    split определяется по имени файла манифеста (train/dev/val/test).
     """
-    import urllib.request
-    import tarfile
-    import csv as _csv
+    import json
 
-    url = cfg.mailabs_archive_url
-    cache = os.path.abspath(cfg.cache_dir)
-    os.makedirs(cache, exist_ok=True)
-    tgz_path = os.path.join(cache, "ru_RU.tgz")
-    extract_dir = os.path.join(cache, "ru_RU")
+    def detect_split(name: str) -> str:
+        n = name.lower()
+        if "test" in n:
+            return "test"
+        if "dev" in n or "val" in n:
+            return "validation"
+        return "train"
 
-    # 1) скачать архив (если ещё нет)
-    if not os.path.exists(extract_dir):
-        if not os.path.exists(tgz_path):
+    # 1) JSON / JSONL манифесты (основной формат RuLS)
+    for cur, _dirs, files in os.walk(root):
+        for fn in files:
+            if not (fn.endswith(".json") or fn.endswith(".jsonl")):
+                continue
+            split = detect_split(fn)
+            fpath = os.path.join(cur, fn)
             try:
-                print(f"[mailabs-archive] скачиваю {url} ...")
-                print("  (~5-6 ГБ, это разовая операция; затем всё из кэша)")
-                urllib.request.urlretrieve(url, tgz_path)
-            except Exception as e:
-                print(f"[mailabs-archive] не удалось скачать архив ({e}).")
-                print("  Скачайте ru_RU.tgz вручную и положите в:", tgz_path)
-                return None
-        # 2) распаковать
-        try:
-            print("[mailabs-archive] распаковываю архив ...")
-            with tarfile.open(tgz_path, "r:gz") as tar:
-                tar.extractall(cache)
-        except Exception as e:
-            print(f"[mailabs-archive] ошибка распаковки ({e}).")
-            return None
-
-    # 3) собрать все metadata.csv (LJSpeech-формат) рекурсивно
-    samples = []
-    for root, _dirs, files in os.walk(cache):
-        if "metadata.csv" in files:
-            meta = os.path.join(root, "metadata.csv")
-            wav_dir = os.path.join(root, "wavs")
-            try:
-                with open(meta, encoding="utf-8") as f:
-                    for row in _csv.reader(f, delimiter="|"):
-                        if len(row) < 2:
-                            continue
-                        clip_id = row[0]
-                        # столбец 1 — оригинальный текст с пунктуацией (нужен нам);
-                        # столбец 2 (если есть) — нормализованный (без пунктуации)
-                        sentence = row[1]
-                        wav = os.path.join(wav_dir, clip_id + ".wav")
-                        samples.append({"sentence": sentence, "audio_path": wav})
+                with open(fpath, encoding="utf-8") as f:
+                    content = f.read().strip()
+                # пробуем как JSONL (по строке на объект)
+                rows = []
+                ok_jsonl = True
+                for line in content.splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        rows.append(json.loads(line))
+                    except Exception:
+                        ok_jsonl = False
+                        break
+                if not ok_jsonl:
+                    obj = json.loads(content)
+                    rows = obj if isinstance(obj, list) else [obj]
+                for r in rows:
+                    if not isinstance(r, dict):
+                        continue
+                    af = r.get("audio_filepath") or r.get("audio") or r.get("wav")
+                    if not af:
+                        continue
+                    wav = af if os.path.isabs(af) else os.path.join(cur, af)
+                    if not os.path.exists(wav):
+                        alt = os.path.join(root, af)
+                        wav = alt if os.path.exists(alt) else wav
+                    yield {"row": r, "audio_path": wav, "split": split}
             except Exception:
                 continue
 
-    if not samples:
-        print("[mailabs-archive] не найдено metadata.csv после распаковки.")
-        return None
 
-    print(f"[mailabs-archive] собрано {len(samples)} клипов из архива.")
-    if limit:
-        samples = samples[:limit]
+def load_ruls_from_archive(cfg: DataConfig):
+    """
+    Скачивает и распаковывает RuLS из официального архива OpenSLR
+    (НЕ через HuggingFace Hub). Перебирает зеркала US/EU/CN.
+    Возвращает список сэмплов [{row, audio_path, split}] либо None.
+    """
+    import urllib.request
+    import tarfile
+
+    cache = os.path.abspath(cfg.cache_dir)
+    os.makedirs(cache, exist_ok=True)
+    tgz_path = os.path.join(cache, "ruls_data.tar.gz")
+    extract_dir = os.path.join(cache, "ruls_data")
+    marker = os.path.join(extract_dir, "_extracted.ok")
+
+    if not os.path.exists(marker):
+        if not os.path.exists(tgz_path):
+            ok = False
+            for url in cfg.ruls_archive_urls:
+                try:
+                    print(f"[ruls-archive] скачиваю {url}")
+                    print("  (~9 ГБ, разовая операция; затем всё из кэша)")
+                    urllib.request.urlretrieve(url, tgz_path)
+                    ok = True
+                    break
+                except Exception as e:
+                    print(f"  не вышло с этого зеркала: {e}")
+                    continue
+            if not ok:
+                print("[ruls-archive] не удалось скачать ни с одного зеркала.")
+                print("  Скачайте ruls_data.tar.gz вручную (зеркало CN обычно открывается)")
+                print("  и положите в:", tgz_path)
+                return None
+        try:
+            print("[ruls-archive] распаковка (несколько минут) ...")
+            os.makedirs(extract_dir, exist_ok=True)
+            with tarfile.open(tgz_path, "r:gz") as tar:
+                tar.extractall(extract_dir)
+            open(marker, "w").close()
+        except Exception as e:
+            print(f"[ruls-archive] ошибка распаковки: {e}")
+            return None
+
+    samples = list(_ruls_iter_manifest(extract_dir))
+    if not samples:
+        print("[ruls-archive] не найдено манифестов в архиве.")
+        return None
+    print(f"[ruls-archive] собрано {len(samples)} клипов из архива.")
     return samples
 
 
-def load_mailabs(cfg: DataConfig, split: str = "train", limit: Optional[int] = None):
+def load_ruls(cfg: DataConfig, split: str = "train", limit: Optional[int] = None):
     """
-    Загружает M-AILABS (русские аудиокниги). Порядок попыток:
-      1) официальный архив caito.de (надёжно, без HF Hub) — если cfg.use_archive;
-      2) HuggingFace Hub по списку имён + автопоиск.
+    Загружает Russian LibriSpeech (RuLS). Порядок попыток:
+      1) официальный архив OpenSLR (надёжно, без HF Hub) — если cfg.use_archive;
+      2) HuggingFace Hub (istupakov/russian_librispeech).
 
-    M-AILABS идёт одним набором — train/val/test нарезаются сами (по seed).
-    Возвращает (samples, is_hf): список сэмплов и флаг, HF это Dataset или
-    список dict из архива (формат сэмпла одинаков по ключам sentence/audio_path|audio).
+    Возвращает (samples, is_hf): список сэмплов и флаг источника.
+    Каждый сэмпл несёт текст (с приоритетом text_no_preprocessing) и audio_path.
+    Используется родной split RuLS (train/validation/test).
     """
-    # --- маршрут 1: официальный архив (не зависит от HF Hub) ---
+    # --- маршрут 1: официальный архив ---
     if getattr(cfg, "use_archive", True):
-        arch = load_mailabs_from_archive(cfg, limit=None)
+        arch = load_ruls_from_archive(cfg)
         if arch is not None:
-            return _split_samples(arch, cfg, split, limit), False
+            sel = [s for s in arch if s["split"] == split]
+            if not sel:  # если split не распознан в манифестах — делим сами
+                sel = _split_list(arch, cfg, split)
+            else:
+                # нормализуем форму к {field: value} + audio_path
+                sel = [{**s["row"], "audio_path": s["audio_path"]} for s in sel]
+            if limit:
+                sel = sel[:limit]
+            return sel, False
 
     # --- маршрут 2: HuggingFace Hub ---
     try:
         from datasets import load_dataset
-    except Exception as e:
-        print(f"[load_mailabs] библиотека datasets недоступна ({e}).")
-        return None, False
-
-    base = None
-    last_err = None
-    candidates = list(cfg.mailabs_repos)
-
-    # автопоиск по Hub API, если хотим и список кандидатов можно дополнить
-    if cfg.mailabs_autosearch:
-        try:
-            from huggingface_hub import HfApi
-            api = HfApi()
-            found = api.list_datasets(search="m-ailabs", limit=50)
-            ru_like = []
-            for d in found:
-                did = getattr(d, "id", "")
-                low = did.lower()
-                if "ailabs" in low and ("ru" in low or "rus" in low):
-                    ru_like.append(did)
-            for did in ru_like:
-                if did not in candidates:
-                    candidates.insert(0, did)
-            if ru_like:
-                print(f"[load_mailabs] автопоиск нашёл кандидатов: {ru_like}")
-        except Exception as e:
-            print(f"[load_mailabs] автопоиск недоступен ({e}).")
-
-    for repo in candidates:
-        try:
-            base = load_dataset(repo, split="train", cache_dir=cfg.cache_dir,
-                                trust_remote_code=True)
-            print(f"[load_mailabs] загружен репозиторий: {repo} ({len(base)} клипов).")
-            break
-        except Exception as e:
-            last_err = e
-            continue
-    if base is None:
-        print(f"[load_mailabs] не удалось загрузить M-AILABS. Проверенные имена: "
-              f"{candidates}. Последняя ошибка: {last_err}.")
-        print("  Совет: оставьте cfg.data.use_archive=True для загрузки с caito.de,")
-        print("  либо скачайте ru_RU.tgz вручную в cfg.data.cache_dir.")
-        return None, False
-
-    return _split_samples(base, cfg, split, limit, is_hf=True), True
-
-
-def _split_samples(base, cfg: DataConfig, split: str,
-                   limit: Optional[int], is_hf: bool = False):
-    """Детерминированный train/val/test split для HF Dataset или списка dict."""
-    n = len(base)
-    n_test = int(n * cfg.test_ratio)
-    n_val = int(n * cfg.val_ratio)
-    bounds = {
-        "test": (0, n_test),
-        "validation": (n_test, n_test + n_val),
-        "train": (n_test + n_val, n),
-    }
-    lo, hi = bounds.get(split, bounds["train"])
-
-    if is_hf:
-        base = base.shuffle(seed=42)
-        ds = base.select(range(lo, hi))
+        hf_split = {"validation": "validation", "test": "test"}.get(split, "train")
+        ds = load_dataset(cfg.ruls_repo, split=hf_split, cache_dir=cfg.cache_dir,
+                          trust_remote_code=True)
         if limit:
             ds = ds.select(range(min(limit, len(ds))))
-        return ds
-    else:
-        import random as _r
-        idx = list(range(n))
-        _r.Random(42).shuffle(idx)
-        chosen = idx[lo:hi]
-        if limit:
-            chosen = chosen[:limit]
-        return [base[i] for i in chosen]
+        print(f"[load_ruls] HF: {cfg.ruls_repo} split={hf_split} ({len(ds)} строк).")
+        return ds, True
+    except Exception as e:
+        print(f"[load_ruls] HF Hub недоступен ({e}).")
+        print("  Совет: оставьте use_archive=True (OpenSLR), либо скачайте")
+        print("  ruls_data.tar.gz вручную в cfg.data.cache_dir.")
+        return None, False
+
+
+def _split_list(samples, cfg: DataConfig, split: str):
+    """Сам делит список сэмплов на train/val/test (если родной split неясен)."""
+    import random as _r
+    n = len(samples)
+    n_test = int(n * cfg.test_ratio)
+    n_val = int(n * cfg.val_ratio)
+    bounds = {"test": (0, n_test), "validation": (n_test, n_test + n_val),
+              "train": (n_test + n_val, n)}
+    lo, hi = bounds.get(split, bounds["train"])
+    idx = list(range(n)); _r.Random(42).shuffle(idx)
+    return [{**samples[i]["row"], "audio_path": samples[i]["audio_path"]}
+            for i in idx[lo:hi]]
 
 
 def examples_from_pkl(pkl_path: str, cfg: DataConfig,
                       use_alignment: bool = True,
+                      split: Optional[str] = None,
                       limit: Optional[int] = None) -> List[Example]:
     """
-    Загружает готовые Example из .pkl (созданного prepare_mailabs.py) и при
+    Загружает готовые Example из .pkl (созданного prepare_ruls.py) и при
     наличии forced-aligner ДОСЧИТЫВАЕТ акустику по meta['audio_path'].
 
+    Поддерживает два формата .pkl:
+      * список Example;
+      * dict вида {'train': [...], 'validation': [...], 'test': [...]} —
+        тогда параметр split выбирает нужный набор (по умолчанию 'train').
+
     Это самый надёжный путь, когда HuggingFace Hub недоступен: данные готовятся
-    автономным скриптом из архива caito.de, а ноутбук просто их подхватывает.
+    автономным скриптом из архива OpenSLR, а ноутбук просто их подхватывает.
     """
     import pickle
     with open(pkl_path, "rb") as f:
-        examples: List[Example] = pickle.load(f)
+        data = pickle.load(f)
+
+    if isinstance(data, dict):
+        key = split or "train"
+        examples: List[Example] = data.get(key, [])
+    else:
+        examples = data
     if limit:
         examples = examples[:limit]
 
@@ -594,8 +610,8 @@ def _sample_to_example(sample: Dict, idx: int, cfg: DataConfig,
     if not raw:
         return None
 
-    # M-AILABS — книжный текст: пытаемся извлечь абзацы (use_documents=True);
-    # FLEURS — одно предложение: обычный parse_transcription.
+    # RuLS/FLEURS — отдельные предложения: parse_transcription.
+    # use_documents=True (извлечение абзацев) оставлено для книжных корпусов.
     if use_documents:
         words, punct_ids, para_ids, cap_ids = parse_document(raw)
     else:
@@ -639,7 +655,7 @@ def build_examples(
     split: str = "train",
     limit: Optional[int] = None,
     use_alignment: bool = True,
-    source: str = "mailabs",
+    source: str = "ruls",
     mix_fleurs: bool = False,
 ) -> List[Example]:
     """
@@ -647,14 +663,16 @@ def build_examples(
 
     Параметры
     ---------
-    source       : основной корпус — "mailabs" (по умолчанию) или "fleurs".
-    mix_fleurs   : если True и source="mailabs", добавляет FLEURS для разнообразия.
+    source       : основной корпус — "ruls" (по умолчанию) или "fleurs".
+    mix_fleurs   : если True и source="ruls", добавляет FLEURS для разнообразия.
     use_alignment: при True и установленном forced-aligner считает акустику
                    (паузы/F0/энергия); иначе — text-only (нулевые признаки).
 
-    M-AILABS (аудиокниги) несёт полную пунктуацию (? ! …) и реальные абзацы,
-    поэтому классы QUESTION/EXCLAM/ELLIPSIS и голова PARA получают сигнал —
-    в отличие от FLEURS.
+    RuLS (аудиокниги LibriVox): берём поле text_no_preprocessing — оригинальный
+    текст С пунктуацией (запятые, точки, ? ! …) и капитализацией. Поэтому классы
+    QUESTION/EXCLAM/ELLIPSIS получают реальный сигнал, в отличие от FLEURS.
+    Примечание: RuLS — это отдельные предложения, поэтому абзацы (PARA) в нём
+    почти не встречаются (голова para остаётся рабочей, но сигнала по ней мало).
     """
     aligner_ok = (_try_import_aligner() is not None) if use_alignment else False
     if use_alignment and not aligner_ok:
@@ -663,12 +681,12 @@ def build_examples(
     examples: List[Example] = []
 
     # --- основной корпус ---
-    if source == "mailabs":
-        ds, _is_hf = load_mailabs(cfg, split=split, limit=limit)
+    if source == "ruls":
+        ds, _is_hf = load_ruls(cfg, split=split, limit=limit)
         if ds is not None:
             for idx, sample in enumerate(ds):
                 ex = _sample_to_example(sample, idx, cfg, split, aligner_ok,
-                                        cfg.text_field_candidates, use_documents=True)
+                                        cfg.text_field_candidates, use_documents=False)
                 if ex:
                     examples.append(ex)
     elif source == "fleurs":
@@ -682,7 +700,7 @@ def build_examples(
                     examples.append(ex)
 
     # --- опциональное смешивание с FLEURS ---
-    if source == "mailabs" and mix_fleurs:
+    if source == "ruls" and mix_fleurs:
         ds_f = load_fleurs(cfg, split=split if split != "validation" else "validation",
                            limit=limit)
         if ds_f is not None:
@@ -701,7 +719,7 @@ def build_examples(
         raise RuntimeError("Корпус недоступен и text-only запрещён в конфиге.")
 
     print(f"[build_examples] собрано {len(examples)} примеров из '{source}'"
-          f"{' + fleurs' if (source=='mailabs' and mix_fleurs) else ''} "
+          f"{' + fleurs' if (source=='ruls' and mix_fleurs) else ''} "
           f"({'с акустикой' if aligner_ok else 'text-only'}).")
     return examples
 

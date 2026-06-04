@@ -1,12 +1,20 @@
---extra-index-url https://download.pytorch.org/whl/cu124
-torch==2.6.0+cu124
-numpy<2.0
-datasets>=2.19.0,<2.21.0
+# --- ядро (обязательно) ---
+torch>=2.0
+numpy<2.0           # совместимость с datasets/transformers экосистемой
+
+# --- данные и предобученные модели ---
+datasets>=2.19.0,<2.21.0   # загрузка M-AILABS (и опц. FLEURS) с HuggingFace Hub
 transformers>=4.40
 huggingface_hub
-soundfile           # бэкенд для чтения аудио FLEURS (DATASETS_AUDIO_BACKEND=soundfile)
+soundfile           # бэкенд чтения аудио (DATASETS_AUDIO_BACKEND=soundfile)
+
+# --- акустические признаки / просодия ---
 librosa             # F0 (pyin), энергия
+
+# --- forced alignment (вариант с отдельной либой) ---
 # Любой из выравнивателей; в data.forced_align используется ctc-forced-aligner.
-# Альтернативы: whisperx ; montreal-forced-aligner (conda)
 ctc-forced-aligner  # pip install git+https://github.com/MahmoudAshraf97/ctc-forced-aligner.git
+# Альтернативы: whisperx ; montreal-forced-aligner (conda)
+
+# --- прочее ---
 tqdm

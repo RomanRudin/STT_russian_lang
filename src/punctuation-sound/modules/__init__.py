@@ -4,16 +4,16 @@ modules — пакет восстановления пунктуации (мул
 Публичный API для ноутбука и встраивания в SpeechToText-пайплайн.
 """
 
-# Версия пакета. Если в ноутбуке modules.__version__ < "2.3", значит загружена
+# Версия пакета. Если в ноутбуке modules.__version__ < "3.0", значит загружена
 # СТАРАЯ версия модулей (нужно обновить файлы в папке modules/ и перезапустить ядро).
-__version__ = "2.3-mailabs"
+__version__ = "3.0-ruls"
 
 from .config import (
     get_config, Config,
     PUNCT_LABELS, PARA_LABELS, CAP_LABELS, ACOUSTIC_FEATURES,
     PRETRAINED_PRESETS,
 )
-from .data import build_examples, parse_transcription, Example, load_fleurs
+from .data import build_examples, parse_transcription, Example, load_fleurs, examples_from_pkl
 from .tokenizer import WordVocab
 from .dataset import (
     BaselineDataset, PretrainedDataset, baseline_collate, pretrained_collate,
@@ -27,7 +27,7 @@ __all__ = [
     "get_config", "Config",
     "PUNCT_LABELS", "PARA_LABELS", "CAP_LABELS", "ACOUSTIC_FEATURES",
     "PRETRAINED_PRESETS",
-    "build_examples", "parse_transcription", "Example", "load_fleurs",
+    "build_examples", "parse_transcription", "Example", "load_fleurs", "examples_from_pkl",
     "WordVocab",
     "BaselineDataset", "PretrainedDataset", "baseline_collate", "pretrained_collate",
     "build_model", "load_hf_tokenizer",
@@ -47,21 +47,23 @@ def diagnose() -> None:
       1) версию загруженных модулей (та ли она, и не кэш ли старая);
       2) из какого python запущено ядро (для отладки «установил, но не видит»);
       3) импорт forced-aligner + объясняет, почему не вышло;
-      4) доступность библиотеки datasets и имена M-AILABS.
+      4) доступность библиотеки datasets и источника RuLS.
     """
     import sys
     print(f"modules.__version__ = {__version__}")
     print(f"python (ядро)       = {sys.executable}")
 
-    # 1) версия config — есть ли новые имена датасета
+    # 1) версия config — RuLS-источник и приоритет поля с пунктуацией
     from .config import DataConfig
-    repos = DataConfig().mailabs_repos
-    print(f"mailabs_repos       = {repos}")
-    if any("mailabs/ru_RU" == r for r in repos) or "psiyou/m-ailabs-ru_RU" not in repos:
-        print("  !! ВНИМАНИЕ: загружена СТАРАЯ версия modules. Обновите файлы в папке")
-        print("     modules/ последней версией и перезапустите ядро (Kernel -> Restart).")
+    dc = DataConfig()
+    has_ruls = hasattr(dc, "ruls_archive_urls")
+    print(f"ruls_repo           = {getattr(dc, 'ruls_repo', '—')}")
+    print(f"text_field[0]       = {dc.text_field_candidates[0]}")
+    if not has_ruls or dc.text_field_candidates[0] != "text_no_preprocessing":
+        print("  !! ВНИМАНИЕ: загружена СТАРАЯ версия modules (нет RuLS или не то текстовое поле).")
+        print("     Обновите файлы в папке modules/ и перезапустите ядро (Kernel -> Restart).")
     else:
-        print("  ок: версия модулей актуальная.")
+        print("  ок: версия модулей актуальная (RuLS, поле text_no_preprocessing).")
 
     # 2) forced-aligner
     print("\nforced-aligner:")
@@ -87,11 +89,12 @@ def diagnose() -> None:
         print(f"  !! библиотека datasets недоступна: {e}")
         print("     pip install 'datasets>=2.19,<2.21'")
 
-    # 4) Hub доступность (быстрая проверка)
+    # 4) Источник RuLS
+    print("\nRuLS:")
+    print("  Основной путь — официальный архив OpenSLR (зеркала US/EU/CN), не HF Hub.")
+    print("  Рекомендуется: python prepare_ruls.py  (см. README), затем examples_from_pkl(...).")
     try:
-        from huggingface_hub import HfApi
-        names = [d.id for d in HfApi().list_datasets(search="m-ailabs", limit=10)]
-        print(f"  M-AILABS на Hub (поиск): {names[:10] if names else 'ничего не найдено'}")
-    except Exception as e:
-        print(f"  поиск по Hub недоступен ({type(e).__name__}: {e}).")
-        print("  Возможен ограниченный доступ к huggingface.co (прокси/файрвол).")
+        from huggingface_hub import HfApi  # noqa: F401
+        print("  huggingface_hub доступен (можно пробовать и HF-путь).")
+    except Exception:
+        print("  huggingface_hub недоступен — используйте архивный путь (prepare_ruls.py).")

@@ -190,34 +190,34 @@ class TrainConfig:
 
 @dataclass
 class DataConfig:
-    # --- основной корпус: M-AILABS (русские аудиокниги) ---
-    # Источник — LibriVox/Gutenberg: художественные тексты с ПОЛНОЙ пунктуацией
-    # (запятые, точки, ? ! …) и реальными абзацами. Поэтому, в отличие от FLEURS,
-    # классы QUESTION/EXCLAM/ELLIPSIS и голова PARA получают реальный сигнал.
-    dataset_name: str = "google/fleurs"   # оставлен для совместимости/смешивания
+    # --- основной корпус: Russian LibriSpeech (RuLS) ---
+    # Аудиокниги LibriVox, ~98 ч. КЛЮЧЕВОЕ: у RuLS два текстовых поля —
+    #   text                    : нормализованный, БЕЗ пунктуации (для ASR) — НЕ годится;
+    #   text_no_preprocessing   : оригинальный книжный текст С ПОЛНОЙ пунктуацией
+    #                             (запятые, точки, ? ! …, тире) и капитализацией.
+    # Мы обучаемся на text_no_preprocessing — там есть все целевые классы.
     lang: str = "ru_ru"
 
-    # Имена загрузок M-AILABS (ru) на HuggingFace Hub. Перебираются по порядку:
-    # берётся первая, которая успешно загрузится. Если ни одна не сработает,
-    # load_mailabs дополнительно ищет датасет по Hub API автоматически.
-    # Схема `psiyou/m-ailabs-XX_XX` подтверждена для других языков (it_IT, и т.п.).
-    mailabs_repos: List[str] = field(default_factory=lambda: [
-        "psiyou/m-ailabs-ru_RU",
-        "gigant/m-ailabs_speech_dataset_ru",
-        "Vikhrmodels/m-ailabs_ru",
-    ])
-    # Разрешить автопоиск датасета по Hub API, если список выше не сработал.
-    mailabs_autosearch: bool = True
-
-    # --- надёжный путь: официальный архив caito.de (НЕ зависит от HF Hub) ---
-    # Пробуется ПЕРВЫМ (use_archive=True). Качается один раз в cache_dir.
-    use_archive: bool = True
-    mailabs_archive_url: str = "https://www.caito.de/data/Training/stt_tts/ru_RU.tgz"
-    # Возможные имена текстового поля в разных загрузках M-AILABS.
+    # HuggingFace-репозиторий RuLS (опция, если Hub доступен).
+    ruls_repo: str = "istupakov/russian_librispeech"
+    # Поля с текстом, приоритет — с пунктуацией. Первое присутствующее берётся.
     text_field_candidates: List[str] = field(default_factory=lambda: [
-        "sentence", "transcription", "raw_transcription", "text",
+        "text_no_preprocessing",   # <-- С ПУНКТУАЦИЕЙ (главное поле)
+        "transcript", "sentence", "text",
     ])
-    # M-AILABS обычно идёт одним split 'train' — делим сами.
+
+    # --- надёжный путь: официальный архив OpenSLR (НЕ зависит от HF Hub) ---
+    # Пробуется ПЕРВЫМ (use_archive=True). Качается один раз в cache_dir (~9.1 ГБ).
+    # Зеркала: US/EU/CN — CN-зеркало обычно открывается там, где HF заблокирован.
+    use_archive: bool = True
+    ruls_archive_urls: List[str] = field(default_factory=lambda: [
+        "https://www.openslr.org/resources/96/ruls_data.tar.gz",
+        "https://openslr.elda.org/resources/96/ruls_data.tar.gz",      # EU
+        "https://openslr.magicdatatech.com/resources/96/ruls_data.tar.gz",  # CN
+    ])
+
+    # RuLS уже разбит на train/dev/test — используем родной split.
+    # (val_ratio/test_ratio применяются только если split нужно делать самим.)
     val_ratio: float = 0.1
     test_ratio: float = 0.1
 
