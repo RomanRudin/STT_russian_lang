@@ -353,21 +353,100 @@ def _pick_text_field(sample: Dict, candidates: List[str]) -> str:
     return ""
 
 
+def load_mailabs_from_archive(cfg: DataConfig, limit: Optional[int] = None):
+    """
+    Загружает русский M-AILABS напрямую из официального архива caito.de
+    (НЕ через HuggingFace Hub — работает, когда Hub недоступен).
+
+    Качает ru_RU.tgz (~оф. источник, формат LJSpeech: дерево папок с wavs/ и
+    metadata.csv вида `id|оригинальный_текст|нормализованный_текст`), распаковывает
+    в cfg.cache_dir и собирает список dict-сэмплов {sentence, audio_path}.
+
+    Возвращает список сэмплов (не HF Dataset) либо None. Аудио читается лениво
+    при вычислении акустики; для text-only режима аудио не нужно.
+    """
+    import urllib.request
+    import tarfile
+    import csv as _csv
+
+    url = cfg.mailabs_archive_url
+    cache = os.path.abspath(cfg.cache_dir)
+    os.makedirs(cache, exist_ok=True)
+    tgz_path = os.path.join(cache, "ru_RU.tgz")
+    extract_dir = os.path.join(cache, "ru_RU")
+
+    # 1) скачать архив (если ещё нет)
+    if not os.path.exists(extract_dir):
+        if not os.path.exists(tgz_path):
+            try:
+                print(f"[mailabs-archive] скачиваю {url} ...")
+                print("  (~5-6 ГБ, это разовая операция; затем всё из кэша)")
+                urllib.request.urlretrieve(url, tgz_path)
+            except Exception as e:
+                print(f"[mailabs-archive] не удалось скачать архив ({e}).")
+                print("  Скачайте ru_RU.tgz вручную и положите в:", tgz_path)
+                return None
+        # 2) распаковать
+        try:
+            print("[mailabs-archive] распаковываю архив ...")
+            with tarfile.open(tgz_path, "r:gz") as tar:
+                tar.extractall(cache)
+        except Exception as e:
+            print(f"[mailabs-archive] ошибка распаковки ({e}).")
+            return None
+
+    # 3) собрать все metadata.csv (LJSpeech-формат) рекурсивно
+    samples = []
+    for root, _dirs, files in os.walk(cache):
+        if "metadata.csv" in files:
+            meta = os.path.join(root, "metadata.csv")
+            wav_dir = os.path.join(root, "wavs")
+            try:
+                with open(meta, encoding="utf-8") as f:
+                    for row in _csv.reader(f, delimiter="|"):
+                        if len(row) < 2:
+                            continue
+                        clip_id = row[0]
+                        # столбец 1 — оригинальный текст с пунктуацией (нужен нам);
+                        # столбец 2 (если есть) — нормализованный (без пунктуации)
+                        sentence = row[1]
+                        wav = os.path.join(wav_dir, clip_id + ".wav")
+                        samples.append({"sentence": sentence, "audio_path": wav})
+            except Exception:
+                continue
+
+    if not samples:
+        print("[mailabs-archive] не найдено metadata.csv после распаковки.")
+        return None
+
+    print(f"[mailabs-archive] собрано {len(samples)} клипов из архива.")
+    if limit:
+        samples = samples[:limit]
+    return samples
+
+
 def load_mailabs(cfg: DataConfig, split: str = "train", limit: Optional[int] = None):
     """
-    Загружает M-AILABS (русские аудиокниги) с HuggingFace Hub.
+    Загружает M-AILABS (русские аудиокниги). Порядок попыток:
+      1) официальный архив caito.de (надёжно, без HF Hub) — если cfg.use_archive;
+      2) HuggingFace Hub по списку имён + автопоиск.
 
-    M-AILABS обычно публикуется одним split 'train' — поэтому мы грузим train
-    целиком и сами нарезаем train/validation/test по долям val_ratio/test_ratio
-    (детерминированно, с фиксированным seed). `split` выбирает нужный кусок.
-
-    Возвращает HF Dataset (срез) либо None при недоступности всех зеркал.
+    M-AILABS идёт одним набором — train/val/test нарезаются сами (по seed).
+    Возвращает (samples, is_hf): список сэмплов и флаг, HF это Dataset или
+    список dict из архива (формат сэмпла одинаков по ключам sentence/audio_path|audio).
     """
+    # --- маршрут 1: официальный архив (не зависит от HF Hub) ---
+    if getattr(cfg, "use_archive", True):
+        arch = load_mailabs_from_archive(cfg, limit=None)
+        if arch is not None:
+            return _split_samples(arch, cfg, split, limit), False
+
+    # --- маршрут 2: HuggingFace Hub ---
     try:
         from datasets import load_dataset
     except Exception as e:
         print(f"[load_mailabs] библиотека datasets недоступна ({e}).")
-        return None
+        return None, False
 
     base = None
     last_err = None
@@ -385,7 +464,6 @@ def load_mailabs(cfg: DataConfig, split: str = "train", limit: Optional[int] = N
                 low = did.lower()
                 if "ailabs" in low and ("ru" in low or "rus" in low):
                     ru_like.append(did)
-            # русские варианты в начало очереди (без дублей)
             for did in ru_like:
                 if did not in candidates:
                     candidates.insert(0, did)
@@ -405,12 +483,17 @@ def load_mailabs(cfg: DataConfig, split: str = "train", limit: Optional[int] = N
             continue
     if base is None:
         print(f"[load_mailabs] не удалось загрузить M-AILABS. Проверенные имена: "
-              f"{candidates}. Последняя ошибка: {last_err}. "
-              f"Укажите рабочее имя в cfg.data.mailabs_repos.")
-        return None
+              f"{candidates}. Последняя ошибка: {last_err}.")
+        print("  Совет: оставьте cfg.data.use_archive=True для загрузки с caito.de,")
+        print("  либо скачайте ru_RU.tgz вручную в cfg.data.cache_dir.")
+        return None, False
 
-    # детерминированный train/val/test split
-    base = base.shuffle(seed=42)
+    return _split_samples(base, cfg, split, limit, is_hf=True), True
+
+
+def _split_samples(base, cfg: DataConfig, split: str,
+                   limit: Optional[int], is_hf: bool = False):
+    """Детерминированный train/val/test split для HF Dataset или списка dict."""
     n = len(base)
     n_test = int(n * cfg.test_ratio)
     n_val = int(n * cfg.val_ratio)
@@ -420,10 +503,67 @@ def load_mailabs(cfg: DataConfig, split: str = "train", limit: Optional[int] = N
         "train": (n_test + n_val, n),
     }
     lo, hi = bounds.get(split, bounds["train"])
-    ds = base.select(range(lo, hi))
+
+    if is_hf:
+        base = base.shuffle(seed=42)
+        ds = base.select(range(lo, hi))
+        if limit:
+            ds = ds.select(range(min(limit, len(ds))))
+        return ds
+    else:
+        import random as _r
+        idx = list(range(n))
+        _r.Random(42).shuffle(idx)
+        chosen = idx[lo:hi]
+        if limit:
+            chosen = chosen[:limit]
+        return [base[i] for i in chosen]
+
+
+def examples_from_pkl(pkl_path: str, cfg: DataConfig,
+                      use_alignment: bool = True,
+                      limit: Optional[int] = None) -> List[Example]:
+    """
+    Загружает готовые Example из .pkl (созданного prepare_mailabs.py) и при
+    наличии forced-aligner ДОСЧИТЫВАЕТ акустику по meta['audio_path'].
+
+    Это самый надёжный путь, когда HuggingFace Hub недоступен: данные готовятся
+    автономным скриптом из архива caito.de, а ноутбук просто их подхватывает.
+    """
+    import pickle
+    with open(pkl_path, "rb") as f:
+        examples: List[Example] = pickle.load(f)
     if limit:
-        ds = ds.select(range(min(limit, len(ds))))
-    return ds
+        examples = examples[:limit]
+
+    aligner_ok = (_try_import_aligner() is not None) if use_alignment else False
+    if not aligner_ok:
+        if use_alignment:
+            print("[examples_from_pkl] forced-aligner не установлен — text-only.")
+        print(f"[examples_from_pkl] загружено {len(examples)} примеров (text-only).")
+        return examples
+
+    # досчитываем акустику
+    import soundfile as sf
+    done = 0
+    for i, ex in enumerate(examples):
+        wav = ex.meta.get("audio_path")
+        if not wav or not os.path.exists(wav):
+            continue
+        try:
+            audio, sr = sf.read(wav, dtype="float32")
+            if audio.ndim > 1:
+                audio = audio.mean(axis=1)
+            cache_path = os.path.join(cfg.alignment_dir, f"pkl_{i}.json")
+            word_ts = forced_align(audio, sr, ex.words, cache_path=cache_path)
+            if word_ts:
+                ex.acoustic = compute_acoustic_features(audio, sr, word_ts, ex.words)
+                ex.has_acoustic = True
+                done += 1
+        except Exception:
+            continue
+    print(f"[examples_from_pkl] загружено {len(examples)}, акустика посчитана для {done}.")
+    return examples
 
 
 def load_fleurs(cfg: DataConfig, split: str = "train", limit: Optional[int] = None):
@@ -465,14 +605,27 @@ def _sample_to_example(sample: Dict, idx: int, cfg: DataConfig,
 
     has_ac = False
     acoustic = np.zeros((len(words), ACOUSTIC_DIM), dtype=np.float32)
-    if aligner_ok and "audio" in sample and sample["audio"] is not None:
-        audio = np.asarray(sample["audio"]["array"], dtype=np.float32)
-        sr = sample["audio"].get("sampling_rate", cfg.sample_rate)
-        cache_path = os.path.join(cfg.alignment_dir, f"{split}_{idx}.json")
-        word_ts = forced_align(audio, sr, words, cache_path=cache_path)
-        if word_ts:
-            acoustic = compute_acoustic_features(audio, sr, word_ts, words)
-            has_ac = True
+    if aligner_ok:
+        audio, sr = None, cfg.sample_rate
+        # вариант 1: HF-поле audio с массивом
+        if "audio" in sample and sample["audio"] is not None and isinstance(sample["audio"], dict):
+            audio = np.asarray(sample["audio"]["array"], dtype=np.float32)
+            sr = sample["audio"].get("sampling_rate", cfg.sample_rate)
+        # вариант 2: путь к wav (архив caito.de)
+        elif sample.get("audio_path") and os.path.exists(sample["audio_path"]):
+            try:
+                import soundfile as sf
+                audio, sr = sf.read(sample["audio_path"], dtype="float32")
+                if audio.ndim > 1:
+                    audio = audio.mean(axis=1)  # стерео -> моно
+            except Exception:
+                audio = None
+        if audio is not None:
+            cache_path = os.path.join(cfg.alignment_dir, f"{split}_{idx}.json")
+            word_ts = forced_align(audio, sr, words, cache_path=cache_path)
+            if word_ts:
+                acoustic = compute_acoustic_features(audio, sr, word_ts, words)
+                has_ac = True
 
     return Example(
         words=words, punct_ids=punct_ids, para_ids=para_ids,
@@ -511,7 +664,7 @@ def build_examples(
 
     # --- основной корпус ---
     if source == "mailabs":
-        ds = load_mailabs(cfg, split=split, limit=limit)
+        ds, _is_hf = load_mailabs(cfg, split=split, limit=limit)
         if ds is not None:
             for idx, sample in enumerate(ds):
                 ex = _sample_to_example(sample, idx, cfg, split, aligner_ok,

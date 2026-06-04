@@ -208,6 +208,11 @@ class DataConfig:
     ])
     # Разрешить автопоиск датасета по Hub API, если список выше не сработал.
     mailabs_autosearch: bool = True
+
+    # --- надёжный путь: официальный архив caito.de (НЕ зависит от HF Hub) ---
+    # Пробуется ПЕРВЫМ (use_archive=True). Качается один раз в cache_dir.
+    use_archive: bool = True
+    mailabs_archive_url: str = "https://www.caito.de/data/Training/stt_tts/ru_RU.tgz"
     # Возможные имена текстового поля в разных загрузках M-AILABS.
     text_field_candidates: List[str] = field(default_factory=lambda: [
         "sentence", "transcription", "raw_transcription", "text",
