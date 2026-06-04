@@ -159,6 +159,9 @@ class TrainConfig:
     seed: int = 42
     device: str = "cuda"           # автоматически падает на cpu, если cuda недоступна
     num_workers: int = 0
+    # Раздельные lr для предобученных моделей (используются при is_pretrained=True).
+    encoder_lr: float = 3e-5       # мягкое дообучение энкодера RuBERT
+    head_lr: float = 3e-3          # быстрее учим новые головы + акустический энкодер
     # Веса трёх лоссов (пунктуация важнее всего).
     w_punct: float = 1.0
     w_para: float = 0.5
@@ -195,12 +198,16 @@ class DataConfig:
     lang: str = "ru_ru"
 
     # Имена загрузок M-AILABS (ru) на HuggingFace Hub. Перебираются по порядку:
-    # берётся первая, которая успешно загрузится (зеркала бывают разными).
+    # берётся первая, которая успешно загрузится. Если ни одна не сработает,
+    # load_mailabs дополнительно ищет датасет по Hub API автоматически.
+    # Схема `psiyou/m-ailabs-XX_XX` подтверждена для других языков (it_IT, и т.п.).
     mailabs_repos: List[str] = field(default_factory=lambda: [
+        "psiyou/m-ailabs-ru_RU",
+        "gigant/m-ailabs_speech_dataset_ru",
         "Vikhrmodels/m-ailabs_ru",
-        "espnet/m-ailabs_ru",
-        "mailabs/ru_RU",
     ])
+    # Разрешить автопоиск датасета по Hub API, если список выше не сработал.
+    mailabs_autosearch: bool = True
     # Возможные имена текстового поля в разных загрузках M-AILABS.
     text_field_candidates: List[str] = field(default_factory=lambda: [
         "sentence", "transcription", "raw_transcription", "text",

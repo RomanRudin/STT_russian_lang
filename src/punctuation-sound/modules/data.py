@@ -371,7 +371,30 @@ def load_mailabs(cfg: DataConfig, split: str = "train", limit: Optional[int] = N
 
     base = None
     last_err = None
-    for repo in cfg.mailabs_repos:
+    candidates = list(cfg.mailabs_repos)
+
+    # автопоиск по Hub API, если хотим и список кандидатов можно дополнить
+    if cfg.mailabs_autosearch:
+        try:
+            from huggingface_hub import HfApi
+            api = HfApi()
+            found = api.list_datasets(search="m-ailabs", limit=50)
+            ru_like = []
+            for d in found:
+                did = getattr(d, "id", "")
+                low = did.lower()
+                if "ailabs" in low and ("ru" in low or "rus" in low):
+                    ru_like.append(did)
+            # русские варианты в начало очереди (без дублей)
+            for did in ru_like:
+                if did not in candidates:
+                    candidates.insert(0, did)
+            if ru_like:
+                print(f"[load_mailabs] автопоиск нашёл кандидатов: {ru_like}")
+        except Exception as e:
+            print(f"[load_mailabs] автопоиск недоступен ({e}).")
+
+    for repo in candidates:
         try:
             base = load_dataset(repo, split="train", cache_dir=cfg.cache_dir,
                                 trust_remote_code=True)
@@ -381,8 +404,9 @@ def load_mailabs(cfg: DataConfig, split: str = "train", limit: Optional[int] = N
             last_err = e
             continue
     if base is None:
-        print(f"[load_mailabs] не удалось загрузить M-AILABS ни с одного зеркала "
-              f"(последняя ошибка: {last_err}).")
+        print(f"[load_mailabs] не удалось загрузить M-AILABS. Проверенные имена: "
+              f"{candidates}. Последняя ошибка: {last_err}. "
+              f"Укажите рабочее имя в cfg.data.mailabs_repos.")
         return None
 
     # детерминированный train/val/test split
@@ -529,22 +553,39 @@ def build_examples(
     return examples
 
 
-def _demo_examples() -> List[Example]:
-    """Несколько примеров «на сухую», чтобы код запускался без сети/датасета.
-    Используем parse_document, чтобы продемонстрировать и метки абзацев (PARA)."""
+def _demo_examples(n_repeat: int = 60) -> List[Example]:
+    """
+    Запасные примеры, чтобы код исполнялся без сети/датасета.
+
+    ВАЖНО: это НЕ настоящий корпус. Если build_examples вернул их — значит
+    M-AILABS не загрузился, и любые метрики на них бессмысленны (фактически
+    обучение на горстке предложений). Размножаем до n_repeat, чтобы хотя бы
+    не падал цикл обучения, и громко предупреждаем.
+    """
+    print("=" * 70)
+    print("ВНИМАНИЕ: используются ДЕМО-примеры (M-AILABS не загрузился).")
+    print("Это НЕ реальный корпус — метрики на них не имеют смысла.")
+    print("Укажите рабочее имя датасета в cfg.data.mailabs_repos и перезапустите.")
+    print("=" * 70)
     demo_docs = [
         "Привет, как дела? Я давно тебя не видел!\nСегодня хорошая погода. "
         "Может, прогуляемся по набережной…",
         "Что это было? Невероятно! Я не ожидал такого поворота событий.\n"
         "Москва — столица России, крупный экономический центр.",
+        "Он медленно открыл дверь. За ней никого не было… "
+        "Куда же все подевались?\nСтранно, очень странно.",
+        "Книга лежала на столе, раскрытая на середине. "
+        "Кто её читал? И зачем оставил здесь?",
+        "Мы долго шли по лесу, усталые и голодные. "
+        "Наконец показалась деревня!\nЛюди встретили нас радушно.",
     ]
-    out = []
+    base = []
     for t in demo_docs:
         words, p, par, cap = parse_document(t)
-        out.append(Example(words, p, par, cap,
-                           np.zeros((len(words), ACOUSTIC_DIM), np.float32),
-                           has_acoustic=False))
-    return out
+        base.append(Example(words, p, par, cap,
+                            np.zeros((len(words), ACOUSTIC_DIM), np.float32),
+                            has_acoustic=False))
+    return base * n_repeat
 
 
 # ---------------------------------------------------------------------------

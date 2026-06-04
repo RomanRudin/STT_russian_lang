@@ -166,7 +166,10 @@ def train_model(
 
     # Оптимизатор
     if is_pretrained and hasattr(model, "param_groups"):
-        groups = model.param_groups(encoder_lr=2e-5, head_lr=1e-3)
+        # энкодер дообучаем мягко, новые головы (+акустика) учим быстрее,
+        # иначе при коротком обучении головы не успевают сойти с инициализации
+        groups = model.param_groups(encoder_lr=getattr(cfg, "encoder_lr", 3e-5),
+                                    head_lr=getattr(cfg, "head_lr", 3e-3))
         optimizer = torch.optim.AdamW(groups, weight_decay=cfg.weight_decay)
     else:
         optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr,
