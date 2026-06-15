@@ -1,132 +1,137 @@
 import os
-import random
+import json
 import logging
-from typing import List, Dict, Any, Optional
+import random
+from typing import Dict, Any, List
 from datasets import Dataset, DatasetDict, Audio
 
 logger = logging.getLogger(__name__)
 
-# TSV column indices
-_PATH_COL = 0
-_DUR_COL = 1
-_TEXT_COL = 2
-
-def _find_tsv_files(root: str, pattern: str) -> List[str]:
-    """Find TSV files containing `pattern` in filename under root."""
-    matches = []
-    for dirpath, _, filenames in os.walk(root):
-        for fname in filenames:
-            if fname.endswith(".tsv") and pattern in fname:
-                matches.append(os.path.join(dirpath, fname))
-    return sorted(matches)
-
-def _resolve_audio_path(rel_path: str, root: str) -> Optional[str]:
-    """Resolve relative audio path to absolute existing file."""
-    candidates = [
-        rel_path,
-        os.path.join(root, rel_path),
-        os.path.join(root, os.path.basename(rel_path)),
-    ]
-    # Try different extensions
-    for c in list(candidates):
-        if c.endswith(".opus"):
-            candidates.append(c[:-5] + ".wav")
-        elif c.endswith(".wav"):
-            candidates.append(c[:-4] + ".opus")
-    return next((c for c in candidates if os.path.isfile(c)), None)
-
-def _read_golos_tsv(tsv_path: str, root: str, max_dur: float, min_dur: float) -> List[Dict[str, str]]:
-    """Read one TSV manifest and return list of {'path': ..., 'sentence': ...}."""
+def _read_jsonl_manifest(manifest_path: str, root_dir: str, max_dur: float, min_dur: float, allowed_subsets: List[str] = None) -> List[Dict[str, str]]:
+    """Читает манифест, фильтрует по сабсетам и ищет аудиофайлы."""
     records = []
-    with open(tsv_path, encoding='utf-8') as f:
+    manifest_dir = os.path.dirname(manifest_path)
+    
+    with open(manifest_path, 'r', encoding='utf-8') as f:
         for line in f:
-            line = line.strip()
-            if not line:
+            if not line.strip():
                 continue
-            parts = line.split('\t')
-            if len(parts) < 3:
+            
+            data = json.loads(line)
+            rel_path = data.get("audio_filepath", "")
+            text = data.get("text", "").strip()
+            duration = data.get("duration", 0.0)
+            
+            # 1. Фильтрация по длительности
+            if not (min_dur <= duration <= max_dur):
                 continue
-            rel_path = parts[_PATH_COL].strip()
-            dur_str = parts[_DUR_COL].strip()
-            text = parts[_TEXT_COL].strip()
             if not text:
                 continue
-            try:
-                dur = float(dur_str)
-                if dur > max_dur or dur < min_dur:
+                
+            # 2. Фильтрация по сабсетам (crowd / farfield)
+            # В train один общий манифест, поэтому проверяем, есть ли слово "crowd" в пути
+            if allowed_subsets:
+                if not any(sub in rel_path or sub in manifest_path for sub in allowed_subsets):
                     continue
-            except ValueError:
-                pass
-            abs_path = _resolve_audio_path(rel_path, root)
-            if abs_path is None:
-                continue
-            records.append({"path": abs_path, "sentence": text})
+                    
+            # 3. Умный поиск аудиофайла
+            candidates = [
+                os.path.join(manifest_dir, rel_path),                          # Относительно самого манифеста
+                os.path.join(root_dir, rel_path),                              # Относительно корня
+                os.path.join(root_dir, "train", rel_path),                     # Если путь от train
+                os.path.join(root_dir, "test", rel_path),                      # Если путь от test
+                os.path.join(manifest_dir, "files", os.path.basename(rel_path)) # Для папки test/crowd/files/
+            ]
+            
+            abs_path = None
+            for c in candidates:
+                if os.path.isfile(c):
+                    abs_path = c
+                    break
+                # Fallback: если манифест просит .wav, а у нас .opus
+                c_opus = c.replace('.wav', '.opus')
+                if os.path.isfile(c_opus):
+                    abs_path = c_opus
+                    break
+                    
+            if abs_path:
+                records.append({"audio": abs_path, "sentence": text})
+                
     return records
 
 def create_golos(cfg: Dict[str, Any]) -> DatasetDict:
-    """
-    Load Golos dataset from local directory.
-
-    Args:
-        cfg: Configuration with dataset.sources.golos.path, subsets, val_fraction,
-             and dataset.params for duration limits.
-
-    Returns:
-        DatasetDict with 'train', 'validation', and optionally 'test'.
-    """
+    """Собирает датасет Голос под специфичную структуру train/test."""
     golos_cfg = cfg['dataset']['sources']['golos']
-    path = golos_cfg.get('path')
-    if not path or not os.path.isdir(path):
-        raise FileNotFoundError(f"Golos path not found: {path}")
+    root_path = golos_cfg.get('path')
+    
+    if not root_path or not os.path.isdir(root_path):
+        raise FileNotFoundError(f"Корневая папка с Голосом не найдена: {root_path}")
 
-    subsets = golos_cfg.get('subsets', ['crowd', 'farfield'])
-    val_frac = golos_cfg.get('val_fraction', 0.02)
+    subsets = golos_cfg.get('subsets', ['crowd'])
     max_dur = cfg['dataset']['params']['max_duration']
     min_dur = cfg['dataset']['params']['min_duration']
     sample_rate = cfg['dataset']['params']['sample_rate']
 
-    logger.info("Loading Golos from %s, subsets: %s", path, subsets)
+    logger.info("Загрузка датасета Голос из %s, сабсеты: %s", root_path, subsets)
 
     train_records = []
     test_records = []
 
-    for subset in subsets:
-        # Train manifests
-        train_tsvs = _find_tsv_files(path, f"{subset}_train")
-        if not train_tsvs:
-            train_tsvs = _find_tsv_files(path, "train")
-            train_tsvs = [t for t in train_tsvs if subset in t]
-        for tsv in train_tsvs:
-            train_records.extend(_read_golos_tsv(tsv, path, max_dur, min_dur))
+    # --- 1. ЗАГРУЗКА TRAIN ---
+    # В train лежит общий manifest.json(l). Ищем его.
+    train_manifest = os.path.join(root_path, "train", "manifest.jsonl")
+    if not os.path.isfile(train_manifest):
+        train_manifest = os.path.join(root_path, "train", "manifest.json") # Ты писал, что у тебя .json
+        
+    if os.path.isfile(train_manifest):
+        logger.info(f"Читаем train манифест: {train_manifest}")
+        train_records.extend(_read_jsonl_manifest(train_manifest, root_path, max_dur, min_dur, subsets))
+    else:
+        logger.warning(f"Манифест train не найден по пути: {train_manifest}")
 
-        # Test manifests
-        test_tsvs = _find_tsv_files(path, f"{subset}_test")
-        if not test_tsvs:
-            test_tsvs = _find_tsv_files(path, "test")
-            test_tsvs = [t for t in test_tsvs if subset in t]
-        for tsv in test_tsvs:
-            test_records.extend(_read_golos_tsv(tsv, path, max_dur, min_dur))
+    # --- 2. ЗАГРУЗКА TEST (используем как Validation) ---
+    # В test лежат отдельные папки crowd и farfield с их манифестами
+    for subset in subsets:
+        test_manifest = os.path.join(root_path, "test", subset, "manifest.jsonl")
+        if not os.path.isfile(test_manifest):
+            test_manifest = os.path.join(root_path, "test", subset, "manifest.json")
+            
+        if os.path.isfile(test_manifest):
+            logger.info(f"Читаем test манифест: {test_manifest}")
+            test_records.extend(_read_jsonl_manifest(test_manifest, root_path, max_dur, min_dur, [subset]))
 
     if not train_records:
-        raise RuntimeError(f"No valid training records found in {path}")
+        raise RuntimeError(f"Не найдено тренировочных аудиозаписей в {root_path}. Проверь структуру папок и пути.")
 
+    # Перемешиваем тренировочную выборку
     random.shuffle(train_records)
-    n_val = max(1, int(len(train_records) * val_frac))
-    val_records = train_records[:n_val]
-    train_records = train_records[n_val:]
+
+    max_train = cfg['dataset'].get('max_train_samples')
+    max_eval = cfg['dataset'].get('max_eval_samples')
+
+    if max_train and max_train < len(train_records):
+        train_records = train_records[:max_train]
+        logger.info("Тренировочная выборка урезана до %d примеров", max_train)
+
+    if test_records and max_eval and max_eval < len(test_records):
+        test_records = test_records[:max_eval]
+        logger.info("Тестовая выборка урезана до %d примеров", max_eval)
 
     def to_dataset(records):
         ds = Dataset.from_list(records)
-        ds = ds.rename_column("path", "audio")
         ds = ds.cast_column("audio", Audio(sampling_rate=sample_rate))
         return ds
 
-    result = DatasetDict({
-        "train": to_dataset(train_records),
-        "validation": to_dataset(val_records),
-    })
+    result_dict = {"train": to_dataset(train_records)}
+    
     if test_records:
-        result["test"] = to_dataset(test_records)
+        result_dict["validation"] = to_dataset(test_records)
+    else:
+        val_frac = golos_cfg.get('val_fraction', 0.02)
+        n_val = max(1, int(len(train_records) * val_frac))
+        result_dict["validation"] = to_dataset(train_records[:n_val])
+        result_dict["train"] = to_dataset(train_records[n_val:])
 
-    logger.info("Golos splits: %s", {k: len(v) for k, v in result.items()})
+    result = DatasetDict(result_dict)
+    logger.info("Голос загружен. Сплиты: %s", {k: len(v) for k, v in result.items()})
     return result

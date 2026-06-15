@@ -45,7 +45,7 @@ dataset:
     - "text_normalizer"
   cache:
     use_cache: true
-    cache_dir: "./acoustic/data/processed_wav2vec2"
+    cache_dir: "./acoustic/data/processed"
     force_recreate: false
   sources:
     fleurs:

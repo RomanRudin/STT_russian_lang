@@ -1,0 +1,82 @@
+model:
+  name: "custom_CNN_RNN"
+  builder: "custom_CNN_RNN"
+  n_mels: 80
+  hidden_size: 256
+  num_gru_layers: 2
+  collator: "custom_CNN_RNN"
+  collator_params:
+    sample_rate: 16000
+    n_mels: 80
+    augmentations:
+      gaussian_noise:
+        enabled: true
+        noise_level_min: 0.001
+        noise_level_max: 0.015
+        prob: 0.3
+      gain:
+        enabled: true
+        min_db: -10.0
+        max_db: 5.0
+        prob: 0.5
+      time_shift:
+        enabled: true
+        max_shift_ratio: 0.1
+        prob: 0.5
+
+dataset:
+  max_train_samples: 150000
+  max_eval_samples: 5000
+  create_function: "combined_dataset"
+  filters:
+    - "duration_filter"
+    - "text_normalizer"
+  cache:
+    use_cache: true
+    cache_dir: "./acoustic/data/processed"
+    force_recreate: false
+  sources:
+    fleurs:
+      enabled: false
+    golos:
+      enabled: true
+      path: "/home/abonentvneseti/data/golos"
+      subsets: ["crowd"]
+      val_fraction: 0.02
+  params:
+    sample_rate: 16000
+    max_duration: 15.0
+    min_duration: 0.5
+  num_proc: 6 
+
+training:
+  trainer: "custom_CNN_RNN_Trainer"
+  output_dir: "./acoustic/checkpoints_custom"
+  logging_dir: "./acoustic/checkpoints_custom/logs"
+  experiment_name: "custom_CNN_RNN"
+  per_device_train_batch_size: 32 
+  per_device_eval_batch_size: 32
+  gradient_accumulation_steps: 1
+  learning_rate: 3.0e-4
+  warmup_steps: 1000
+  num_train_epochs: 5
+  eval_strategy: "epoch"
+  save_strategy: "epoch"
+  logging_strategy: "epoch"
+  fp16: false
+  dataloader_num_workers: 6
+  load_best_model_at_end: true
+  metric_for_best_model: "wer"
+  greater_is_better: false
+  save_total_limit: 3
+  resume_from: null
+  metrics:
+    - "wer"
+    - "cer"
+    - "f1"
+    - "detailed_stats"
+    - "ser"
+    - "space_wer"
+  callbacks:
+    - "tqdm"
+    - "eval_tqdm"
