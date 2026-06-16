@@ -55,8 +55,9 @@ def load_and_prepare_dataset(cfg: Dict[str, Any]) -> DatasetDict:
             logger.info(f"Validation dataset has {eval_size} samples, which is <= max_eval_samples={max_eval}; keeping all.")
 
     # Save fully processed dataset to cache
-    os.makedirs(cache_dir, exist_ok=True)
-    dataset.save_to_disk(cache_dir)
-    logger.info("Processed dataset saved to cache: %s", cache_dir)
+    if use_cache:
+        os.makedirs(cache_dir, exist_ok=True)
+        dataset.save_to_disk(cache_dir)
+        logger.info("Processed dataset saved to cache: %s", cache_dir)
 
     return dataset

@@ -1,6 +1,6 @@
 #pip install torch==2.3.1 torchvision==0.18.1 torchaudio==2.3.1 --index-url https://download.pytorch.org/whl/rocm5.7
 #pip install transformers==4.37.2 accelerate==0.28.0 tokenizers==0.15.2 peft==0.10.0 datasets==2.18.0 evaluate==0.4.6 numpy==1.26.0 librosa==0.10.2 soundfile==0.12.1 jiwer==3.0.3 pyyaml==6.0.3 tensorboard==2.17.0 matplotlib==3.7.2 jupyter==1.0.0 ipywidgets==8.1.5
-
+#pip install sentencepiece==0.2.0
 import torch
 
 print(f"PyTorch version: {torch.__version__}")

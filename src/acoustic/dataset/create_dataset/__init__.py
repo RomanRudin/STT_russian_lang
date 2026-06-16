@@ -4,7 +4,7 @@ from acoustic.utils.registry import PluginRegistry
 from .fleurs_dataset import create_fleurs
 from .golos_dataset import create_golos
 from .combined_dataset import create_combined
-
+from .correction_dataset import create_correction_dataset
 
 def _builder_interface(cfg: dict) -> DatasetDict:
     ...
@@ -16,6 +16,7 @@ DATASET_BUILDERS = PluginRegistry("dataset_builder", interface=_builder_interfac
 DATASET_BUILDERS.register("fleurs", create_fleurs)
 DATASET_BUILDERS.register("golos", create_golos)
 DATASET_BUILDERS.register("combined_dataset", create_combined)
+DATASET_BUILDERS.register("correction_dataset", create_correction_dataset)
 
 
 def get_dataset_builder(name: str):

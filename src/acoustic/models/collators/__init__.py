@@ -9,9 +9,13 @@ def get_collator_class(name: str):
 # Manual registration
 from .whisper_collator import WhisperDataCollator
 from .wav2vec2_collator import Wav2Vec2DataCollator
+
 from .custom_CNN_RNN_collator import  CustomSTTCollator
+from .correction_collator import  RuT5DataCollator
 
 
 COLLATORS.register("whisper", WhisperDataCollator)
 COLLATORS.register("wav2vec2", Wav2Vec2DataCollator)
+
 COLLATORS.register("custom_CNN_RNN", CustomSTTCollator)
+COLLATORS.register("correction_model", RuT5DataCollator)

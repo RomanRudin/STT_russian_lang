@@ -2,6 +2,7 @@ test
 checkpoints
 checkpoints*
 data
+data_correction
 
 __pycache__/
 *.py[codz]
