@@ -18,7 +18,7 @@ def _apply_lora(model: WhisperForConditionalGeneration, r: int = 32, alpha: int 
         target_modules=["q_proj", "v_proj"],
         lora_dropout=0.05,
         bias="none",
-        task_type=TaskType.FEATURE_EXTRACTION,
+        task_type=TaskType.SEQ_2_SEQ_LM,
     )
     model = get_peft_model(model, lora_config)
     model.print_trainable_parameters()
@@ -51,11 +51,7 @@ def build_whisper(cfg: Dict[str, Any]) -> Tuple[WhisperForConditionalGeneration,
     return model, processor
 
 def _whisper_generate(model, input_data, processor):
-    kwargs = {
-        'forced_decoder_ids': getattr(model.config, 'forced_decoder_ids', None),
-        'suppress_tokens': getattr(model.config, 'suppress_tokens', [])
-    }
-    return model.generate(input_data, **kwargs)
+    return model.generate(input_data)
 
 def load_checkpoint(checkpoint_dir: str, cfg: Dict[str, Any]) -> Tuple[WhisperForConditionalGeneration, WhisperProcessor]:
     logger.info("Loading checkpoint from %s", checkpoint_dir)

@@ -1,18 +1,8 @@
-"""
-Whisper-specific data collator: pads audio, creates label tensors.
-Accepts configurable max lengths and optional waveform augmentations.
-"""
-
 from typing import Dict, Any, List, Optional
 import torch
 from transformers import WhisperProcessor
 
-
 class WhisperDataCollator:
-    """
-    Pads audio to `max_audio_length` seconds and builds label tensors.
-    """
-
     def __init__(
         self,
         processor: WhisperProcessor,
@@ -30,21 +20,17 @@ class WhisperDataCollator:
         audio_arrays = [f["audio"]["array"] for f in features]
         sentences = [f["sentence"] for f in features]
 
-        # Apply waveform augmentations if any
         if self.augmentations:
             augmented_audio = []
             for arr in audio_arrays:
                 waveform = torch.tensor(arr).float()
-                # Ensure waveform is (1, samples) for augmentations expecting channels
                 if waveform.dim() == 1:
                     waveform = waveform.unsqueeze(0)
                 for aug in self.augmentations:
                     waveform = aug(waveform, sample_rate=16000)
-                # Convert back to numpy (samples,)
                 augmented_audio.append(waveform.squeeze(0).numpy())
             audio_arrays = augmented_audio
 
-        # Feature extraction
         inputs = self.processor.feature_extractor(
             audio_arrays,
             sampling_rate=16000,
@@ -52,9 +38,9 @@ class WhisperDataCollator:
             padding="max_length",
             max_length=self.max_audio_samples,
             truncation=True,
+            return_attention_mask=True,
         )
 
-        # Tokenize labels
         with self.processor.tokenizer.as_target_tokenizer():
             labels = self.processor.tokenizer(
                 sentences,
@@ -65,4 +51,9 @@ class WhisperDataCollator:
             ).input_ids
 
         labels = labels.masked_fill(labels == self.processor.tokenizer.pad_token_id, -100)
-        return {"input_features": inputs.input_features, "labels": labels}
+
+        return {
+            "input_features": inputs.input_features,
+            "attention_mask": inputs.attention_mask,
+            "labels": labels,
+        }
