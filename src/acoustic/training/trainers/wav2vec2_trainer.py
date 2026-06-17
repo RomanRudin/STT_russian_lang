@@ -39,7 +39,7 @@ class Wav2Vec2Trainer(BaseTrainer):
             learning_rate=t_cfg['learning_rate'],
             warmup_steps=t_cfg['warmup_steps'],
             num_train_epochs=t_cfg['num_train_epochs'],
-            evaluation_strategy=t_cfg.get('eval_strategy', 'epoch'),
+            eval_strategy=t_cfg.get('eval_strategy', 'epoch'),
             save_strategy=t_cfg.get('save_strategy', 'epoch'),
             logging_strategy=t_cfg.get('logging_strategy', 'epoch'),
             fp16=t_cfg['fp16'] and torch.cuda.is_available(),
@@ -99,7 +99,7 @@ class Wav2Vec2Trainer(BaseTrainer):
             eval_dataset=self.eval_dataset,
             data_collator=self.data_collator,
             compute_metrics=self._compute_metrics,
-            tokenizer=self.processor.feature_extractor, # Для Wav2Vec2 Trainer иногда требует feature_extractor
+            processing_class=self.processor, # Для Wav2Vec2 Trainer иногда требует feature_extractor
             callbacks=hf_callbacks,
         )
 

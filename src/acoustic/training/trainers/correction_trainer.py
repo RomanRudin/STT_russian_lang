@@ -36,7 +36,7 @@ class RuT5Trainer(BaseTrainer):
             per_device_eval_batch_size=t_cfg.get('batch_size', 16),
             learning_rate=t_cfg.get('learning_rate', 3e-4),
             num_train_epochs=t_cfg.get('num_train_epochs', 5),
-            evaluation_strategy=t_cfg.get('evaluation_strategy', 'epoch'),
+            eval_strategy=t_cfg.get('eval_strategy', 'epoch'),
             save_strategy=t_cfg.get('save_strategy', 'epoch'),
             logging_strategy=t_cfg.get('logging_strategy', 'epoch'),
             fp16=False,
@@ -96,7 +96,7 @@ class RuT5Trainer(BaseTrainer):
             eval_dataset=self.eval_dataset,
             data_collator=self.data_collator,
             compute_metrics=self._compute_metrics,
-            tokenizer=self.processor,
+            processing_class=self.processor,
             callbacks=hf_callbacks,
         )
 

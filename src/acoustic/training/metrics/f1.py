@@ -1,20 +1,17 @@
 from typing import Dict, Any
-from jiwer import compute_measures
+from jiwer import process_words
 
 def compute_f1(eval_pred: Dict[str, Any]) -> Dict[str, float]:
-    """
-    Compute micro-averaged word-level F1 score.
-    """
     preds = eval_pred.get("predictions", [])
     refs = eval_pred.get("references", [])
     if not refs:
         return {"f1": 0.0}
 
-    measures = compute_measures(refs, preds)
-    hits = measures["hits"]
-    substitutions = measures["substitutions"]
-    deletions = measures["deletions"]
-    insertions = measures["insertions"]
+    results = process_words(refs, preds)
+    hits = results.hits
+    substitutions = results.substitutions
+    deletions = results.deletions
+    insertions = results.insertions
 
     precision = hits / (hits + substitutions + insertions) if (hits + substitutions + insertions) else 0.0
     recall = hits / (hits + substitutions + deletions) if (hits + substitutions + deletions) else 0.0

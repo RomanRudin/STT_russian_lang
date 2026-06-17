@@ -38,7 +38,7 @@ class WhisperTrainer(BaseTrainer):
             learning_rate=t_cfg['learning_rate'],
             warmup_steps=t_cfg['warmup_steps'],
             num_train_epochs=t_cfg['num_train_epochs'],
-            evaluation_strategy=t_cfg.get('eval_strategy', 'epoch'),
+            eval_strategy=t_cfg.get('eval_strategy', 'epoch'),
             save_strategy=t_cfg.get('save_strategy', 'epoch'),
             logging_strategy=t_cfg.get('logging_strategy', 'epoch'),
             fp16=t_cfg['fp16'] and torch.cuda.is_available(),
@@ -103,7 +103,7 @@ class WhisperTrainer(BaseTrainer):
             eval_dataset=self.eval_dataset,
             data_collator=self.data_collator,
             compute_metrics=self._compute_metrics,
-            tokenizer=self.processor.tokenizer,
+            processing_class=self.processor,
             callbacks=hf_callbacks,
         )
 
