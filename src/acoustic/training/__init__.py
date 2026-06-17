@@ -17,13 +17,15 @@ def get_trainer_class(name: str):
 from .trainer import BaseTrainer
 from .trainers.whisper_trainer import WhisperTrainer
 from .trainers.wav2vec2_trainer import Wav2Vec2Trainer
-
 from .trainers.custom_CNN_RNN_trainer import CustomSTTTrainer
+
 from .trainers.correction_trainer import RuT5Trainer
+from .trainers.lstm_correction_trainer import LSTMCorrectionTrainer
 
 TRAINER_CLASSES.register("BaseTrainer", BaseTrainer)
 TRAINER_CLASSES.register("WhisperTrainer", WhisperTrainer)
 TRAINER_CLASSES.register("Wav2Vec2Trainer", Wav2Vec2Trainer)
-
 TRAINER_CLASSES.register("custom_CNN_RNN_Trainer", CustomSTTTrainer)
+
 TRAINER_CLASSES.register("correction_Trainer", RuT5Trainer)
+TRAINER_CLASSES.register("lstm_correction_Trainer", LSTMCorrectionTrainer)
