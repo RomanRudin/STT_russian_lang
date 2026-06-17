@@ -1,6 +1,9 @@
 test
 checkpoints
 data
+.alignments
+*.tar.gz
+mnt
 
 __pycache__/
 *.py[codz]
