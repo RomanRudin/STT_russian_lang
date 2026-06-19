@@ -28,7 +28,7 @@ venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## Downloading datasets
+<!-- ## Downloading datasets
 
 https://cdn.chatwm.opensmodel.sberdevices.ru/golos/golos_opus.tar
 
@@ -60,4 +60,4 @@ python scripts/compare_experiments.py --csv results.csv
 
 
 
-https://huggingface.co/openai/whisper-large-v3-turbo
+https://huggingface.co/openai/whisper-large-v3-turbo -->
