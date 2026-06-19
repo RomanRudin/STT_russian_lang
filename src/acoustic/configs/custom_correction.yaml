@@ -1,0 +1,50 @@
+model:
+  builder: "correction_model"
+  name: "cointegrated/rut5-small"
+  collator: "correction_model"
+  collator_params:
+    max_length: 128
+
+dataset:
+  create_function: "correction_dataset"
+  max_train_samples: 500000
+  max_eval_samples: 5000
+  cache:
+    use_cache: false
+    cache_dir: "./acoustic/data_correction/processed"
+    force_recreate: false
+  sources:
+    correction:
+      acoustic_config: "acoustic/configs/custom_CNN_RNN.yaml"
+      val_fraction: 0.05
+      generation_batch_size: 64
+      generation_num_workers: 6
+      generation_pin_memory: true
+
+training:
+  trainer: "correction_Trainer"
+  output_dir: "./acoustic/checkpoints_correction"
+  logging_dir: "./acoustic/checkpoints_correction/logs"
+  evaluation_strategy: "epoch"
+  save_strategy: "epoch"
+  logging_strategy: "epoch"
+  num_train_epochs: 5
+  batch_size: 32
+  learning_rate: 0.0003
+  weight_decay: 0.01
+  save_total_limit: 3
+  load_best_model_at_end: true
+  dataloader_num_workers: 6
+  dataloader_pin_memory: true
+  metrics:
+    - "wer"
+    - "cer"
+    - "f1"
+    - "detailed_stats"
+    - "ser"
+    - "space_wer"
+  callbacks:
+   - "tqdm"
+  early_stopping_patience: 2
+  metric_for_best_model: "wer"
+  greater_is_better: false

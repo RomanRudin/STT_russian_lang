@@ -1,0 +1,57 @@
+model:
+  builder: "lstm_correction"
+  hidden_size: 256
+  num_layers: 2
+  dropout: 0.25
+  embedding_dim: 128
+  collator: "lstm_correction"
+  collator_params:
+    max_length: 256
+
+dataset:
+  create_function: "correction_dataset"
+  max_train_samples: 500000
+  max_eval_samples: 5000
+  cache:
+    use_cache: false
+    cache_dir: "./acoustic/data_correction/processed"
+    force_recreate: false
+  sources:
+    correction:
+      acoustic_config: "acoustic/configs/custom_CNN_RNN.yaml"
+      val_fraction: 0.05
+      generation_batch_size: 64
+      generation_num_workers: 6
+      generation_pin_memory: true
+
+training:
+  trainer: "lstm_correction_Trainer"
+  output_dir: "./acoustic/checkpoints_correction"
+  logging_dir: "./acoustic/checkpoints_correction/logs"
+  evaluation_strategy: "epoch"
+  save_strategy: "epoch"
+  logging_strategy: "epoch"
+  num_train_epochs: 5
+  batch_size: 16
+  gradient_accumulation_steps: 2
+  learning_rate: 1.0e-3
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  label_smoothing_factor: 0.0
+  fp16: false
+  dataloader_num_workers: 6
+  dataloader_pin_memory: true
+  load_best_model_at_end: true
+  metric_for_best_model: "wer"
+  greater_is_better: false
+  save_total_limit: 3
+  metrics:
+    - "wer"
+    - "cer"
+    - "f1"
+    - "detailed_stats"
+    - "ser"
+    - "space_wer"
+  callbacks:
+    - "tqdm"
+  early_stopping_patience: 0

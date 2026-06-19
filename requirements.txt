@@ -16,3 +16,4 @@ tensorboard>=2.15.0
 jupyter>=1.0.0
 ipywidgets>=8.0.0
 matplotlib>=3.7.0
+torchcodec==0.14.0

@@ -1,0 +1,99 @@
+# Model settings
+model:
+  name: "openai/whisper-small"
+  builder: "whisper" # ключ в MODEL_BUILDERS
+  language: "russian"
+  task: "transcribe"
+  use_lora: false
+  collator: "whisper" # ключ в реестре collators
+  collator_params:
+    max_audio_length: 30
+    max_label_length: 225
+    augmentations:
+      gaussian_noise:
+        enabled: False
+        noise_level_min: 0.001
+        noise_level_max: 0.015
+        prob: 0.3
+      speed_perturb:
+        enabled: False
+        speed_range: [0.9, 1.1]
+        prob: 0.2
+      pitch_shift:
+        enabled: False
+        min_semitones: -4
+        max_semitones: 4
+        prob: 0.3
+      reverb:
+        enabled: False
+        prob: 0.2
+        rir_path: null
+      gain:
+        enabled: True
+        min_db: -10.0
+        max_db: 5.0
+        prob: 0.5
+      time_shift:
+        enabled: True
+        max_shift_ratio: 0.1
+        prob: 0.5
+
+dataset:
+  #max_train_samples: 100
+  #max_eval_samples: 20 
+  create_function: "combined_dataset" # ключ в реестре dataset
+  filters:
+    - "duration_filter"
+    - "text_normalizer"
+  cache:
+    use_cache: true
+    cache_dir: "./acoustic/data/processed"
+    force_recreate: false
+  sources:
+    fleurs:
+      enabled: true
+    golos:
+      enabled: false
+      path: null # e.g. "D:/golos" or "/data/golos"
+      subsets: ["crowd", "farfield"] # or just ["crowd"]
+      val_fraction: 0.02
+  params:
+    sample_rate: 16000
+    max_duration: 30.0
+    min_duration: 0.5
+  num_proc: 4 # for multiprocessing (set >1 on Linux)
+
+
+training:
+  trainer: "WhisperTrainer"
+  output_dir: "./acoustic/checkpoints"
+  logging_dir: "./acoustic/checkpoints/logs"
+  experiment_name: "baseline"
+  per_device_train_batch_size: 4
+  per_device_eval_batch_size: 8
+  gradient_accumulation_steps: 4
+  learning_rate: 1.0e-5
+  warmup_steps: 500
+  num_train_epochs: 5
+  eval_strategy: "epoch"
+  save_strategy: "epoch"
+  logging_strategy: "epoch"
+  fp16: false # false in any situation
+  dataloader_num_workers: 0
+  load_best_model_at_end: true
+  metric_for_best_model: "wer"
+  greater_is_better: false
+  save_total_limit: 3
+  generation_max_length: 225
+  predict_with_generate: true
+  resume_from: null
+  metrics:
+    - "wer"
+    - "cer"
+    - "f1"
+    - "detailed_stats"
+    - "ser"
+    - "space_wer"
+  callbacks:
+    - "tqdm"
+    - "eval_tqdm"

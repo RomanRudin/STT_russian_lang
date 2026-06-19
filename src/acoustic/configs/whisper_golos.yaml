@@ -1,0 +1,87 @@
+model:
+  name: "openai/whisper-small"
+  builder: "whisper"
+  language: "russian"
+  task: "transcribe"
+  use_lora: false
+  collator: "whisper"
+  collator_params:
+    max_audio_length: 30
+    max_label_length: 225
+    augmentations:
+      gaussian_noise:
+        enabled: false
+      speed_perturb:
+        enabled: false
+      pitch_shift:
+        enabled: false
+      reverb:
+        enabled: false
+      gain:
+        enabled: false
+        min_db: -10.0
+        max_db: 5.0
+        prob: 0.5
+      time_shift:
+        enabled: false
+        max_shift_ratio: 0.1
+        prob: 0.5
+
+dataset:
+  create_function: "combined_dataset"
+  max_train_samples: 2500
+  max_eval_samples: 125
+  filters:
+    - "duration_filter"
+    - "text_normalizer"
+  cache:
+    use_cache: true
+    cache_dir: "./acoustic/data/processed"
+    force_recreate: false
+  sources:
+    fleurs:
+      enabled: false
+    golos:
+      enabled: true
+      path: "/home/abonentvneseti/data/golos"
+      subsets: ["crowd"]
+      val_fraction: 0.02
+  params:
+    sample_rate: 16000
+    max_duration: 30.0
+    min_duration: 0.5
+  num_proc: 4
+
+training:
+  trainer: "WhisperTrainer"
+  output_dir: "./acoustic/checkpoints"
+  logging_dir: "./acoustic/checkpoints/logs"
+  experiment_name: "whisper_small_golos"
+  per_device_train_batch_size: 4
+  per_device_eval_batch_size: 8
+  gradient_accumulation_steps: 4
+  learning_rate: 1.0e-5
+  warmup_steps: 500
+  num_train_epochs: 5
+  eval_strategy: "epoch"
+  save_strategy: "epoch"
+  logging_strategy: "epoch"
+  fp16: false
+  dataloader_num_workers: 0
+  load_best_model_at_end: true
+  metric_for_best_model: "wer"
+  greater_is_better: false
+  save_total_limit: 3
+  predict_with_generate: true
+  generation_max_length: 225
+  resume_from: null
+  metrics:
+    - "wer"
+    - "cer"
+    - "f1"
+    - "detailed_stats"
+    - "ser"
+    - "space_wer"
+  callbacks:
+    - "tqdm"
+    - "eval_tqdm"
